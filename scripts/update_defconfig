@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# shellcheck source=/dev/null
+
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2022-2024 Utsav Balar
+
+# Currently set tip to the current kernel directory
+declare -r krnl_top=$(pwd)
+declare -r krnl_config_dir="arch/arm64/configs/vendor/xiaomi"
+declare -g use_llvm=0
+export krnl_top
+export krnl_config_dir
+
+# Set compiler PATH
+if [[ -d $HOME/zyc-clang/bin ]]; then
+	PATH=$HOME/zyc-clang/bin:$PATH
+	use_llvm=1
+	echo "Using Zyc-Clang from $HOME/zyc-clang/bin"
+elif command -v clang >/dev/null 2>&1; then
+	use_llvm=1
+	echo "Using Clang from $(command -v clang)"
+fi
+
+declare -r base_build_cmd="make ARCH=arm64 ${use_llvm:+LLVM=1 CLANG_TRIPLE=aarch64-linux-gnu-} CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc --all)"
+export base_build_cmd
+
+cd "$krnl_top" || exit
+
+# These values must be changed for forks!
+declare -r krnl_defconfig_url="https://github.com/AstideLabs/android_kernel_xiaomi_sm8250"
+declare -r krnl_defconfig_head=$(git -C "${krnl_config_dir}" rev-parse HEAD)
+
+declare -r soc="kona"
+
+declare -A devices=(
+	[alioth]=1 [apollo]=1 [cas]=1 [cmi]=1 [dagu]=1 [elish]=1
+	[enuma]=1 [lmi]=1 [munch]=1 [umi]=1 [pipa]=1 [thyme]=1 [psyche]=1
+)
+
+print_environment() {
+	local device=$1
+	local out_dir=$2
+	echo "================================================="
+	echo "Your Environment:"
+	echo "Kernel Top  : ${krnl_top}"
+	echo "Config Dir  : ${krnl_config_dir}"
+	echo "Output Dir  : ${out_dir}"
+	rm -rf "${out_dir}"
+	mkdir -p "${out_dir}"
+	if [[ ! -d "${out_dir}" ]]; then
+		echo "Check your environment"
+		echo "ERROR: Could not create output directory ${out_dir}"
+		exit 1
+	fi
+	echo "================================================="
+	echo "SOC -> ${soc} :: Device -> ${device}"
+}
+
+run_merge_config() {
+	local device=$1
+	local out_dir=$2
+	echo "Running scripts/kconfig/merge_config.sh for ${device}..."
+	ret=$(ARCH=arm64 LLVM=$use_llvm scripts/kconfig/merge_config.sh \
+		-O "${out_dir}" \
+		"${krnl_config_dir}/../${soc}-perf_defconfig" \
+		"${krnl_config_dir}/sm8250-common.config" \
+		"${krnl_config_dir}/${device}.config")
+
+	case "$ret" in
+	*"error"* | *"ERROR"* | *"Exit"*)
+		echo "ERROR: $ret"
+		exit 1
+		;;
+	esac
+}
+
+build_defconfig() {
+	local device=$1
+	local out_dir=$2
+	echo "Building new defconfig for ${device}..."
+	ret=$(${base_build_cmd} O="${out_dir}" savedefconfig 2>&1)
+	case "$ret" in
+	*"error"* | *"ERROR"*)
+		echo "ERROR: $ret"
+		exit 1
+		;;
+	esac
+	mv "${out_dir}/defconfig" "./arch/arm64/configs/${device}_defconfig"
+}
+
+process_device() {
+	local device=$1
+	local out_dir="${krnl_top}/temp_${device}"
+	print_environment "$device" "$out_dir"
+	run_merge_config "$device" "$out_dir"
+	build_defconfig "$device" "$out_dir"
+	rm -rf "$out_dir"
+}
+
+if [[ -n $1 ]]; then
+	if [[ ${devices[$1]} ]]; then
+		DEVICE=$1
+		process_device "$DEVICE"
+
+		krnl_commit_msg=$(
+			cat <<EOM
+ARM64: configs: ${DEVICE}: update auto-generated defconfig for ${DEVICE}
+This update is generated automatically by using the update_defconfig script
+HEAD of the project used to prepare this commit:
+${krnl_defconfig_url}/tree/${krnl_defconfig_head}
+EOM
+		)
+	fi
+else
+	krnl_commit_msg=$(
+		cat <<EOM
+ARM64: configs: xiaomi: update auto-generated defconfig for all devices
+This update is generated automatically by using the update_defconfig script
+HEAD of the project used to prepare this commit:
+${krnl_defconfig_url}/tree/${krnl_defconfig_head}
+EOM
+	)
+
+	# Run concurrently
+	pids=()
+	for device in "${!devices[@]}"; do
+		process_device "$device" &
+		pids+=($!)
+	done
+
+	for pid in "${pids[@]}"; do
+		wait "$pid"
+	done
+fi
+
+echo "================================================="
+echo "Done!"
+
+echo "You can now commit the updated defconfig with the following as the commit message:"
+echo "${krnl_commit_msg}"
