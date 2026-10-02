@@ -1937,6 +1937,11 @@ static int himax_power_supply_event(struct notifier_block *nb,
 #endif
 
 #if defined(HX_PEN_DETECT_GLOBAL)
+int himax_get_pen_mode(void)
+{
+	return READ_ONCE(xiaomi_touch_interfaces.touch_mode[Touch_Pen_ENABLE][GET_CUR_VALUE]);
+}
+
 static bool himax_pen_mode_enabled(int pen_mode)
 {
 	return pen_mode == 1 || pen_mode == 17 || pen_mode == 18;

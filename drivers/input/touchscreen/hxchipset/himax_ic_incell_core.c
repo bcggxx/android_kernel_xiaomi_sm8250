@@ -1280,7 +1280,7 @@ static int himax_pen_charge_detect_func(int enable)
 	 * Passing only !enable would silently restore the first-generation type.
 	 */
 	mode_ret = himax_set_pen_mode(enable ? 0 :
-		xiaomi_touch_interfaces.touch_mode[Touch_Pen_ENABLE][GET_CUR_VALUE]);
+		himax_get_pen_mode());
 
 	himax_parse_assign_cmd(pen_charge_detect_addr,tmp_addr,DATA_LEN_4);
 	charge_ret = g_core_fp.fp_register_write(tmp_addr, tmp_data, DATA_LEN_4);
