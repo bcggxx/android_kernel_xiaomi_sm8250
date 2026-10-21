@@ -6,6 +6,8 @@ on:
       - drivers/block/zram/zram_drv.c
       - drivers/block/zram/zram_drv.h
       - tools/testing/selftests/zram/test_miui_tracking_parser.py
+      - fs/f2fs/file.c
+      - tools/testing/selftests/f2fs/test_seq_file_ra.py
       - .github/workflows/dagu-host-check.yml
 permissions:
   contents: read
@@ -19,3 +21,7 @@ jobs:
         env:
           SANITIZERS: address,undefined
         run: python3 tools/testing/selftests/zram/test_miui_tracking_parser.py
+      - name: Test F2FS sequential readahead wrapper with ASan and UBSan
+        env:
+          SANITIZERS: address,undefined
+        run: python3 tools/testing/selftests/f2fs/test_seq_file_ra.py
