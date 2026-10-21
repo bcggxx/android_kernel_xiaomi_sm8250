@@ -3669,6 +3669,8 @@ extern bool path_noexec(const struct path *path);
 extern void inode_nohighmem(struct inode *inode);
 
 /* mm/fadvise.c */
+extern int generic_fadvise(struct file *file, loff_t offset, loff_t len,
+			   int advice);
 extern int vfs_fadvise(struct file *file, loff_t offset, loff_t len,
 		       int advice);
 
