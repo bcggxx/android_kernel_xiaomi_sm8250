@@ -1867,7 +1867,9 @@ struct f2fs_sb_info {
 
 #ifdef CONFIG_F2FS_IOSTAT
 	/* For app/fs IO statistics */
+	/* Period/reset serialization; byte updates only take their type lock. */
 	spinlock_t iostat_lock;
+	spinlock_t iostat_bytes_lock[NR_IO_TYPE];
 	unsigned long long rw_iostat[NR_IO_TYPE];
 	unsigned long long prev_rw_iostat[NR_IO_TYPE];
 	bool iostat_enable;
