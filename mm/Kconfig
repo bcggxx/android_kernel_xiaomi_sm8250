@@ -937,3 +937,30 @@ config MEMFD_ASHMEM_SHIM
 	  now memfds passed to them.
 
 	  Unless you are running Android, say N.
+
+config KSHRINK_SLABD
+	bool "Background slab reclaim worker (experimental)"
+	depends on ARM64 && MEMCG && !NUMA && !MEMORY_HOTPLUG
+	default n
+	help
+	  Allow background kswapd to submit one slab reclaim request to a
+	  dedicated worker during moderate memory pressure. Direct reclaim,
+	  drop_caches, severe pressure and a busy worker remain synchronous.
+	  Requests pin their memory cgroup until completion. This option is
+	  restricted to single-node systems without memory hotplug.
+
+	  This changes reclaim scheduling and needs device stress testing.
+	  If unsure, say N.
+
+config MI_RMAP_EFFICIENCY
+	bool "Bounded high-mapcount file-page protection (experimental)"
+	depends on ARM64 && SYSFS
+	default n
+	help
+	  Adapt Xiaomi's high-mapcount page policy to ordinary file pages.
+	  The default activation threshold is 20 mappings. Protection stops
+	  below 512 MiB available memory, during memcg/forced or constrained
+	  allocation reclaim, and at severe reclaim priorities. Both kept
+	  and activated pages consume a 16 MiB per-context budget.
+
+	  This needs device memory-pressure testing. If unsure, say N.

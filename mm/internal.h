@@ -601,4 +601,17 @@ static inline bool is_migrate_highatomic_page(struct page *page)
 
 void setup_zone_pageset(struct zone *zone);
 extern struct page *alloc_new_node_page(struct page *page, unsigned long node);
+unsigned long shrink_slab(gfp_t gfp_mask, int nid,
+			  struct mem_cgroup *memcg, int priority);
+#ifdef CONFIG_KSHRINK_SLABD
+bool wakeup_kshrink_slabd(gfp_t gfp_mask, int nid,
+			struct mem_cgroup *memcg, int priority);
+#else
+static inline bool wakeup_kshrink_slabd(gfp_t gfp_mask, int nid,
+				      struct mem_cgroup *memcg, int priority)
+{
+	return false;
+}
+#endif
+
 #endif	/* __MM_INTERNAL_H */
