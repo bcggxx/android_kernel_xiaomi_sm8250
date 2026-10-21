@@ -1,122 +1,116 @@
-#include <linux/swap.h>
+// SPDX-License-Identifier: GPL-2.0
+#include <linux/capability.h>
 #include <linux/module.h>
+#include <linux/rcupdate.h>
+#include <linux/resource.h>
+#include <linux/sched.h>
+#include <linux/sched/prio.h>
+#include <linux/sched/signal.h>
+#include <linux/sched/task.h>
+#include <linux/string.h>
+#include <linux/tracepoint.h>
 #include <trace/hooks/binder.h>
 #include <uapi/linux/android/binder.h>
 #include <uapi/linux/sched/types.h>
-#include <linux/sched/prio.h>
-#include <../drivers/android/binder_internal.h>
-#include <../kernel/sched/sched.h>
-#include <linux/string.h>
 
-static const char * const task_name[] = {
-	"com.miui.home",
-	"ndroid.systemui",
-	"surfaceflinger",
-};
-static const char *cameraserver = "cameraserver";
-static const char *RenderThread = "RenderThread";
-static const char *passBlur = "passBlur";
+#include "../../android/binder_internal.h"
 
-static int to_userspace_prio(int policy, int kernel_priority) {
-	if (fair_policy(policy))
-		return PRIO_TO_NICE(kernel_priority);
-	else
-		return MAX_RT_PRIO - 1 - kernel_priority;
-}
-
-static bool set_binder_rt_task(struct binder_transaction *t) {
-	int i;
-	if (!t || !t->from || !t->from->task || !t->to_proc || !t->to_proc->tsk) {
-		return false;
-	}
-
-	if (t->flags & TF_ONE_WAY) {
-		return false;
-	}
-
-	if (!rt_policy(t->from->task->policy)) {
-		return false;
-	}
-
-	if ((strncmp(t->from->task->group_leader->comm, task_name[0], strlen(task_name[0])) == 0)
-		&& (strncmp(t->from->task->comm, RenderThread, strlen(RenderThread)) == 0)
-		&& (strncmp(t->to_proc->tsk->comm, task_name[2], strlen(task_name[2])) == 0)) {
-		return true;
-	}
-
-	if ((strncmp(t->from->task->group_leader->comm, task_name[2], strlen(task_name[2])) == 0)
-		&& (strncmp(t->from->task->comm, passBlur, strlen(passBlur)) == 0)) {
-		return true;
-	}
-
-	if (t->from->task->pid == t->from->task->tgid) {
-		for(i = 0; i < sizeof(task_name)/sizeof(task_name[0]); i++) {
-			if (strncmp(t->from->task->comm, task_name[i], strlen(task_name[i])) == 0) {
-				return true;
-			}
-		}
-		return false;
-	}
-	return false;
-}
-
-static bool is_cameraserver_rt_task(struct binder_transaction *t) {
-	if (t && t->from && t->from->task && (!(t->flags & TF_ONE_WAY)) &&
-		rt_policy(t->from->task->policy)) {
-			struct task_struct *main_task = t->from->task->group_leader;
-			if (strncmp(main_task->comm, cameraserver, strlen(cameraserver)) == 0)
-				return true;
-		}
-	return false;
-}
-
-static void extend_surfacefinger_binder_set_priority_handler(void *data, struct binder_transaction *t, struct task_struct *task) {
-	struct sched_param params;
-	struct binder_priority desired;
-	unsigned int policy;
-	struct binder_node *target_node = t->buffer->target_node;
-
-	desired.prio = target_node->min_priority;
-	desired.sched_policy = target_node->sched_policy;
-	policy = desired.sched_policy;
-	if (set_binder_rt_task(t) || is_cameraserver_rt_task(t)) {
-		desired.sched_policy = SCHED_FIFO;
-		desired.prio = 98;
-		policy = desired.sched_policy;
-	}
-	if (rt_policy(policy) && task->policy != policy) {
-		params.sched_priority = to_userspace_prio(policy, desired.prio);
-		sched_setscheduler_nocheck(task, policy | SCHED_RESET_ON_FORK, &params);
-	}
-}
-
-static void extend_surfacefinger_binder_trans_handler(void *data, struct binder_proc *target_proc,
-    struct binder_proc *proc,struct binder_thread *thread, struct binder_transaction_data *tr) {
-	if (target_proc && target_proc->tsk && strncmp(target_proc->tsk->comm, "surfaceflinger",
-		strlen("surfaceflinger")) == 0) {
-		if (thread && proc && tr && thread->transaction_stack
-			&& (!(thread->transaction_stack->flags & TF_ONE_WAY))) {
-			target_proc->default_priority.sched_policy = SCHED_FIFO;
-			target_proc->default_priority.prio = 98;
-		}
-	}
-}
-
-int __init binder_prio_init(void)
+static bool binder_prio_is_rt(unsigned int policy)
 {
-    pr_info("binder_prio: module init!");
-    register_trace_android_vh_binder_set_priority(extend_surfacefinger_binder_set_priority_handler, NULL);
-    register_trace_android_vh_binder_trans(extend_surfacefinger_binder_trans_handler, NULL);
-
-    return 0;
+	return policy == SCHED_FIFO || policy == SCHED_RR;
 }
 
-void __exit binder_prio_exit(void)
+/* Caller holds RCU while inspecting task group leaders. */
+static bool binder_prio_is_graphics_sender(struct task_struct *sender,
+					   struct task_struct *receiver)
 {
-    unregister_trace_android_vh_binder_set_priority(extend_surfacefinger_binder_set_priority_handler, NULL);
-    unregister_trace_android_vh_binder_trans(extend_surfacefinger_binder_trans_handler, NULL);
+	char group[TASK_COMM_LEN], name[TASK_COMM_LEN], target[TASK_COMM_LEN];
 
-    pr_info("binder_prio: module exit!");
+	if (!binder_prio_is_rt(READ_ONCE(sender->policy)))
+		return false;
+
+	get_task_comm(group, sender->group_leader);
+	get_task_comm(name, sender);
+	get_task_comm(target, receiver->group_leader);
+
+	if (!strcmp(group, "cameraserver"))
+		return true;
+	if (!strcmp(group, "com.miui.home") &&
+	    !strcmp(name, "RenderThread") && !strcmp(target, "surfaceflinger"))
+		return true;
+	if (!strcmp(group, "surfaceflinger") && !strcmp(name, "passBlur"))
+		return true;
+	if (sender->pid != sender->tgid)
+		return false;
+
+	return !strcmp(name, "com.miui.home") ||
+		!strcmp(name, "ndroid.systemui") || !strcmp(name, "surfaceflinger");
+}
+
+static bool binder_prio_is_graphics_transaction(struct binder_transaction *t,
+						struct task_struct *receiver)
+{
+	struct task_struct *sender = NULL;
+	bool graphics = false;
+
+	if (!t || !receiver || (t->flags & TF_ONE_WAY))
+		return false;
+
+	/* t->from can disappear concurrently with sender thread teardown. */
+	rcu_read_lock();
+	spin_lock(&t->lock);
+	if (t->from && t->from->task) {
+		sender = t->from->task;
+		get_task_struct(sender);
+	}
+	spin_unlock(&t->lock);
+	if (sender)
+		graphics = binder_prio_is_graphics_sender(sender, receiver);
+	rcu_read_unlock();
+	if (sender)
+		put_task_struct(sender);
+	return graphics;
+}
+
+static bool binder_prio_receiver_allows_rt(struct task_struct *task)
+{
+	return has_capability_noaudit(task, CAP_SYS_NICE) ||
+		task_rlimit(task, RLIMIT_RTPRIO) >= 1;
+}
+
+static void binder_prio_set_priority(void *unused, struct binder_transaction *t,
+				     struct task_struct *task)
+{
+	struct sched_param params = { .sched_priority = 1 };
+
+	if (!binder_prio_is_graphics_transaction(t, task))
+		return;
+	/* Preserve a stronger/equal RT priority and Binder's receiver limits. */
+	if (READ_ONCE(task->normal_prio) <= MAX_RT_PRIO - 2 ||
+	    !binder_prio_receiver_allows_rt(task))
+		return;
+
+	/* Binder saved the old priority before this hook and restores it later. */
+	sched_setscheduler_nocheck(task, SCHED_FIFO | SCHED_RESET_ON_FORK, &params);
+}
+
+static int __init binder_prio_init(void)
+{
+	int ret;
+
+	ret = register_trace_android_vh_binder_set_priority(binder_prio_set_priority,
+							    NULL);
+	if (ret)
+		return ret;
+	pr_info("binder_prio: transaction-scoped graphics priority enabled\n");
+	return 0;
+}
+
+static void __exit binder_prio_exit(void)
+{
+	unregister_trace_android_vh_binder_set_priority(binder_prio_set_priority,
+							NULL);
+	tracepoint_synchronize_unregister();
 }
 
 module_init(binder_prio_init);
