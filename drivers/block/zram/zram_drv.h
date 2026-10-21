@@ -15,6 +15,7 @@
 #ifndef _ZRAM_DRV_H_
 #define _ZRAM_DRV_H_
 
+#include <linux/atomic.h>
 #include <linux/rwsem.h>
 #include <linux/zsmalloc.h>
 #include <linux/crypto.h>
@@ -136,7 +137,7 @@ struct zram_stats {
 struct zram_pages_life {
 	unsigned int time_nr;
 	int *time_list;
-	unsigned long *lifes;
+	atomic_long_t *lifes;
 	struct rcu_head rcu;
 };
 #endif
@@ -189,6 +190,7 @@ struct zram {
 #endif
 #ifdef CONFIG_MIUI_ZRAM_MEMORY_TRACKING
 	struct zram_pages_life __rcu *pages_life;
+	spinlock_t avg_size_lock;
 	ktime_t first_time;
 	ktime_t last_time;
 	atomic64_t avg_size;

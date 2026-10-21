@@ -37,6 +37,7 @@
 #include <linux/sched.h>
 #include <linux/sched/signal.h>
 #include <linux/vmstat.h>
+#include <linux/math64.h>
 
 #include "zram_drv.h"
 
@@ -1135,43 +1136,38 @@ static inline void update_origin_pages_max(struct zram *zram,
 
 static void average_size(struct zram *zram, const s64 pages_store)
 {
-	ktime_t cur_time = ktime_get_boottime();
-	unsigned long new_avg;
-	ktime_t  diff_time;
+	ktime_t cur_time;
+	unsigned long flags;
+	s64 avg, elapsed_ms, diff_ms;
 
+	spin_lock_irqsave(&zram->avg_size_lock, flags);
+	cur_time = ktime_get_boottime();
 	if (!zram->first_time) {
 		zram->last_time = zram->first_time = cur_time;
 		atomic64_set(&zram->avg_size, pages_store);
 	} else {
-		diff_time = ktime_sub(cur_time, zram->last_time);
-		if (ktime_to_ms(diff_time) > TIME_DIFF_MS) {
-			new_avg = ((zram->last_time - zram->first_time) * atomic64_read(&zram->avg_size)
-				+ diff_time * pages_store) / (cur_time - zram->first_time);
-			atomic64_set(&zram->avg_size, new_avg);
+		diff_ms = ktime_to_ms(cur_time - zram->last_time);
+		if (diff_ms > TIME_DIFF_MS) {
+			elapsed_ms = ktime_to_ms(cur_time - zram->first_time);
+			avg = atomic64_read(&zram->avg_size);
+			/* Milliseconds avoid overflowing pages * uptime in ns. */
+			avg += div64_s64((pages_store - avg) * diff_ms,
+					elapsed_ms);
+			atomic64_set(&zram->avg_size, avg);
 			zram->last_time = cur_time;
 		}
 	}
-	return;
+	spin_unlock_irqrestore(&zram->avg_size_lock, flags);
 }
 
 static void free_pages_life(struct zram_pages_life *pl)
 {
-	if (!pl || !pl->time_nr)
+	if (!pl)
 		return;
 
-	pl->time_nr = 0;
-	if (pl->time_list) {
-		kfree(pl->time_list);
-		pl->time_list = NULL;
-	}
-	if (pl->time_list) {
-		kfree(pl->lifes);
-		pl->lifes = NULL;
-	}
-	if (pl) {
-		kfree(pl);
-		pl = NULL;
-	}
+	kfree(pl->time_list);
+	kfree(pl->lifes);
+	kfree(pl);
 }
 
 static struct zram_pages_life *init_pages_life(void)
@@ -1179,7 +1175,7 @@ static struct zram_pages_life *init_pages_life(void)
 	size_t i = 0;
 	struct zram_pages_life *pl = NULL;
 
-	pl = kmalloc(sizeof(struct zram_pages_life), GFP_KERNEL);
+	pl = kzalloc(sizeof(*pl), GFP_KERNEL);
 	if (!pl) {
 		return NULL;
 	}
@@ -1205,7 +1201,7 @@ static void zram_record_page_life(struct zram *zram, u32 index)
 {
 	struct zram_pages_life *pl = NULL;
 	ktime_t ac_time, diff;
-	int time;
+	s64 time;
 	unsigned int i;
 
 	ac_time = zram->table[index].ac_time;
@@ -1214,18 +1210,20 @@ static void zram_record_page_life(struct zram *zram, u32 index)
 
 	diff = ktime_get_boottime() - ac_time;
 	time = ktime_to_ms(diff) / 1000;
+	if (time < 0)
+		return;
 
 	rcu_read_lock();
 	pl =  rcu_dereference(zram->pages_life);
 	if (pl) {
 		for (i = 0; i < pl->time_nr; i++) {
 			if (time <= pl->time_list[i]) {
-				pl->lifes[i]++;
+				atomic_long_inc(&pl->lifes[i]);
 				rcu_read_unlock();
 				return;
 			}
 		}
-		pl->lifes[i]++;
+		atomic_long_inc(&pl->lifes[i]);
 	}
 	rcu_read_unlock();
 
@@ -1672,7 +1670,8 @@ static size_t print_pages_life(struct zram_pages_life *pl, char *buf)
 
 	for (i = 0; i < pl->time_nr + 1; i++)
 		off += scnprintf(buf + off, PAGE_SIZE - off,
-				"%lu\t", pl->lifes[i]);
+				"%lu\t",
+				(unsigned long)atomic_long_read(&pl->lifes[i]));
 	buf[off - 1] = '\n';
 
 out:
@@ -1691,10 +1690,10 @@ static ssize_t time_list_show(struct device *dev,
 	if (!init_done(zram))
 		goto out;
 
-	pl = rcu_dereference(zram->pages_life);
-	if (pl) {
+	pl = rcu_dereference_protected(zram->pages_life,
+			lockdep_is_held(&zram->init_lock));
+	if (pl)
 		ret = print_time_list(pl, buf);
-	}
 out:
 	up_read(&zram->init_lock);
 	return ret;
@@ -1705,16 +1704,16 @@ static void clean_pages_life(struct rcu_head *rcu)
 	free_pages_life(pl);
 }
 
-static int renew_pages_life(struct zram *zram, unsigned int *time_list, unsigned int time_nr)
+static int renew_pages_life(struct zram *zram, int *time_list,
+			    unsigned int time_nr)
 {
-	struct zram_pages_life *pl_old = zram->pages_life;
+	struct zram_pages_life *pl_old;
 	struct zram_pages_life *pl_new = NULL;
 
-	if (!time_nr || !time_list) {
-		return -ENOMEM;
-	}
+	pl_old = rcu_dereference_protected(zram->pages_life,
+			lockdep_is_held(&zram->init_lock));
 
-	pl_new =  kmalloc(sizeof(struct zram_pages_life), GFP_KERNEL);
+	pl_new = kzalloc(sizeof(*pl_new), GFP_KERNEL);
 	if (!pl_new) {
 		return -ENOMEM;
 	}
@@ -1737,7 +1736,20 @@ static int renew_pages_life(struct zram *zram, unsigned int *time_list, unsigned
 		pl_old = NULL;
 	}
 
-	return time_nr;
+	return 0;
+}
+
+/* Keep both rows of pages_life within the sysfs PAGE_SIZE buffer. */
+#define MAX_LIFE_TIME_BINS 64
+
+static char *next_time_arg(char **args)
+{
+	char *arg;
+
+	while ((arg = strsep(args, " \t\n")) != NULL)
+		if (*arg)
+			return arg;
+	return NULL;
 }
 
 static ssize_t time_list_store(struct device *dev,
@@ -1750,42 +1762,42 @@ static ssize_t time_list_store(struct device *dev,
 	char *arg, *args, *arg_buf;
 	unsigned int time_nr, i;
 
-	args = arg_buf = kstrndup(buf, 32, GFP_KERNEL);
-	arg = strsep(&args, " ");
+	args = arg_buf = kstrndup(buf, len, GFP_KERNEL);
+	if (!arg_buf)
+		return -ENOMEM;
+
+	arg = next_time_arg(&args);
 	if (!arg || kstrtouint(arg, 10, &time_nr))
 		goto free_arg_buf;
-
-	if (!time_nr) {
-		ret = 0;
+	if (!time_nr || time_nr > MAX_LIFE_TIME_BINS)
 		goto free_arg_buf;
-	}
 
-	time_list = kmalloc_array(time_nr,
-				sizeof(*time_list), GFP_KERNEL);
+	time_list = kmalloc_array(time_nr, sizeof(*time_list), GFP_KERNEL);
 	if (!time_list) {
 		ret = -ENOMEM;
 		goto free_arg_buf;
 	}
 	for (i = 0; i < time_nr; i++) {
-		/* get time */
-		arg = strsep(&args, " ");
-		if (!arg || kstrtoint(arg, 10, &time))
+		arg = next_time_arg(&args);
+		if (!arg || kstrtoint(arg, 10, &time) || time < 0)
 			goto free_time;
-
+		if (i && time <= time_list[i - 1])
+			goto free_time;
 		time_list[i] = time;
 	}
+	if (next_time_arg(&args))
+		goto free_time;
 
-	down_read(&zram->init_lock);
-	if (!init_done(zram))
-		goto out;
-	ret = renew_pages_life(zram, time_list, time_nr);
-out:
-	up_read(&zram->init_lock);
+	/* Serialize replacement against other writers, reset and allocation. */
+	down_write(&zram->init_lock);
+	if (init_done(zram))
+		ret = renew_pages_life(zram, time_list, time_nr);
+	up_write(&zram->init_lock);
 free_time:
 	kfree(time_list);
 free_arg_buf:
 	kfree(arg_buf);
-	return ret ? ret : len;
+	return ret ? ret : (ssize_t)len;
 }
 
 static ssize_t pages_life_show(struct device *dev,
@@ -1910,10 +1922,6 @@ static bool zram_meta_alloc(struct zram *zram, u64 disksize)
 		vfree(zram->table);
 		return false;
 	}
-
-#ifdef CONFIG_MIUI_ZRAM_MEMORY_TRACKING
-	rcu_assign_pointer(zram->pages_life, init_pages_life());
-#endif
 
 	if (!huge_class_size)
 		huge_class_size = zs_huge_class_size(zram->mem_pool);
@@ -2495,7 +2503,15 @@ static void zram_reset_device(struct zram *zram)
 	part_stat_set_all(&zram->disk->part0, 0);
 
 #ifdef CONFIG_MIUI_ZRAM_MEMORY_TRACKING
-	free_pages_life(zram->pages_life);
+	{
+		struct zram_pages_life *pl;
+
+		pl = rcu_dereference_protected(zram->pages_life,
+				lockdep_is_held(&zram->init_lock));
+		RCU_INIT_POINTER(zram->pages_life, NULL);
+		if (pl)
+			call_rcu(&pl->rcu, clean_pages_life);
+	}
 #endif
 
 	up_write(&zram->init_lock);
@@ -2539,7 +2555,10 @@ static ssize_t disksize_store(struct device *dev,
 		goto out_free_meta;
 	}
 #ifdef CONFIG_MIUI_ZRAM_MEMORY_TRACKING
+	/* Publish tracking only after every mandatory initialization succeeds. */
+	rcu_assign_pointer(zram->pages_life, init_pages_life());
 	zram->first_time = zram->last_time = 0;
+	atomic64_set(&zram->avg_size, 0);
 #endif
 	zram->comp = comp;
 	zram->disksize = disksize;
@@ -2715,6 +2734,9 @@ static int zram_add(void)
 	device_id = ret;
 
 	init_rwsem(&zram->init_lock);
+#ifdef CONFIG_MIUI_ZRAM_MEMORY_TRACKING
+	spin_lock_init(&zram->avg_size_lock);
+#endif
 #ifdef CONFIG_ZRAM_WRITEBACK
 	spin_lock_init(&zram->wb_limit_lock);
 	zram->writeback_pages = alloc_pages(GFP_KERNEL, MAX_WRITEBACK_ORDER);
@@ -3019,12 +3041,18 @@ static int __init zram_init(void)
 
 out_error:
 	destroy_devices();
+#ifdef CONFIG_MIUI_ZRAM_MEMORY_TRACKING
+	rcu_barrier();
+#endif
 	return ret;
 }
 
 static void __exit zram_exit(void)
 {
 	destroy_devices();
+#ifdef CONFIG_MIUI_ZRAM_MEMORY_TRACKING
+	rcu_barrier();
+#endif
 }
 
 module_init(zram_init);
