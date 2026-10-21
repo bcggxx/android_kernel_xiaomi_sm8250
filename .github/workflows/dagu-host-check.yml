@@ -1,0 +1,21 @@
+name: Dagu host checks
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - drivers/block/zram/zram_drv.c
+      - drivers/block/zram/zram_drv.h
+      - tools/testing/selftests/zram/test_miui_tracking_parser.py
+      - .github/workflows/dagu-host-check.yml
+permissions:
+  contents: read
+jobs:
+  zram-parser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test actual zram parser and allocation rollback with ASan and UBSan
+        env:
+          SANITIZERS: address,undefined
+        run: python3 tools/testing/selftests/zram/test_miui_tracking_parser.py
