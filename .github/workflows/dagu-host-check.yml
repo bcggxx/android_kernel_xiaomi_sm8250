@@ -8,11 +8,18 @@ on:
       - tools/testing/selftests/zram/test_miui_tracking_parser.py
       - fs/f2fs/file.c
       - tools/testing/selftests/f2fs/test_seq_file_ra.py
+      - mm/kshrink_slabd.c
+      - mm/mi_rmap_efficiency.c
+      - mm/mi_rmap_efficiency.h
+      - mm/vmscan.c
+      - tools/testing/selftests/vm/test_dagu_reclaim.py
+      - drivers/staging/binder_prio/binder_prio.c
+      - tools/testing/selftests/binder/test_graphics_priority.py
       - .github/workflows/dagu-host-check.yml
 permissions:
   contents: read
 jobs:
-  zram-parser:
+  host-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -25,3 +32,11 @@ jobs:
         env:
           SANITIZERS: address,undefined
         run: python3 tools/testing/selftests/f2fs/test_seq_file_ra.py
+      - name: Test optional reclaim policies and concurrent submissions
+        env:
+          SANITIZERS: address,undefined
+        run: python3 tools/testing/selftests/vm/test_dagu_reclaim.py
+      - name: Test graphics Binder matching and RT permission limits
+        env:
+          SANITIZERS: address,undefined
+        run: python3 tools/testing/selftests/binder/test_graphics_priority.py
