@@ -9,18 +9,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-root = Path(__file__).resolve().parents[4]
-
-def function(path, name):
-    source = (root / path).read_text()
-    pos = source.index(name + '(')
-    start = source.rfind('\n', 0, pos) + 1
-    brace = source.index('{', pos)
-    end, depth = brace + 1, 1
-    while depth:
-        depth += (source[end] == '{') - (source[end] == '}')
-        end += 1
-    return source[start:end] + '\n'
+from c_helpers import function
 
 common = r'''
 #include <assert.h>

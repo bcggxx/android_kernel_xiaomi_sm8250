@@ -9,18 +9,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-root = Path(__file__).resolve().parents[4]
-source = (root / 'drivers/staging/binder_prio/binder_prio.c').read_text()
-
-def function(name):
-    pos = source.index(name + '(')
-    start = source.rfind('\n', 0, pos) + 1
-    brace = source.index('{', pos)
-    end, depth = brace + 1, 1
-    while depth:
-        depth += (source[end] == '{') - (source[end] == '}')
-        end += 1
-    return source[start:end] + '\n'
+from c_helpers import function
 
 preamble = r'''
 #include <assert.h>
@@ -83,7 +72,7 @@ static void name_task(struct task_struct *task, const char *name, int pid, int t
     task->normal_prio = 120;
 }
 '''
-body = '\n'.join(function(name) for name in [
+body = '\n'.join(function('drivers/staging/binder_prio/binder_prio.c', name) for name in [
     'binder_prio_is_rt', 'binder_prio_is_graphics_sender',
     'binder_prio_is_graphics_transaction', 'binder_prio_receiver_allows_rt',
     'binder_prio_set_priority'])

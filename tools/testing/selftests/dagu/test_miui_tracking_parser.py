@@ -9,19 +9,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-root = Path(__file__).resolve().parents[4]
-source = (root / 'drivers/block/zram/zram_drv.c').read_text()
-
-def function(name):
-    start = source.index(name)
-    start = source.rfind('\nstatic ', 0, start) + 1
-    brace = source.index('{', start)
-    depth = 1
-    end = brace + 1
-    while depth:
-        depth += (source[end] == '{') - (source[end] == '}')
-        end += 1
-    return source[start:end] + '\n'
+from c_helpers import function
 
 preamble = r'''
 #define _GNU_SOURCE
@@ -89,9 +77,9 @@ static void down_write(int *lock) { assert(!*lock); *lock = 1; }
 static void up_write(int *lock) { assert(*lock == 1); *lock = 0; }
 static void call_rcu(struct rcu_head *rcu, void (*fn)(struct rcu_head *)) { fn(rcu); }
 '''
-body = '\n'.join(function(n) for n in [
-    'free_pages_life(', 'init_pages_life(', 'clean_pages_life(',
-    'renew_pages_life(', 'next_time_arg(', 'time_list_store('])
+body = '\n'.join(function('drivers/block/zram/zram_drv.c', n) for n in [
+    'free_pages_life', 'init_pages_life', 'clean_pages_life',
+    'renew_pages_life', 'next_time_arg', 'time_list_store'])
 tests = r'''
 static ssize_t store(struct device *d, const char *s) {
     return time_list_store(d, NULL, s, strlen(s));

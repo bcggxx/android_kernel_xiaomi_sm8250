@@ -1,0 +1,36 @@
+Dagu host regression tests
+==========================
+
+These tests compile functions extracted from the kernel sources against small
+userspace substitutes. They need Python 3, a native C compiler with sanitizer
+support, and pthreads, plus make and tar. The legacy kselftest framework
+also needs bc and rsync. They do not require root or access to device sysfs.
+They do not validate kernel RCU, IPC priority restoration, reclaim progress,
+boot, OOM behavior or device performance.
+
+Run from the kernel source root:
+
+  make -C tools/testing/selftests TARGETS=dagu run_tests
+
+SANITIZERS defaults to undefined. Use SANITIZERS=address,undefined to also
+check memory safety on hosts supporting AddressSanitizer. HOSTCC selects
+the native compiler used for the extracted code.
+
+Use a separate build directory with:
+
+  make -C tools/testing/selftests TARGETS=dagu O=/tmp/dagu-build run_tests
+
+The standard kselftest install target bundles the tested source files in
+kernel-sources.tar, so installed tests do not need the original checkout:
+
+  make -C tools/testing/selftests TARGETS=dagu install INSTALL_PATH=/tmp/dagu-tests
+  /tmp/dagu-tests/run_kselftest.sh
+
+Build the bundle again after changing a source file before installing tests.
+In-tree runs read the live checkout; installed runs read their source bundle.
+The shared extractor handles braces inside C strings, character literals and
+comments, but is not a general-purpose C parser.
+
+This kernel's legacy TAP runner reports failures as "not ok ... [FAIL]"
+without setting a failing exit status. Consumers must check the TAP results;
+the Dagu host checks workflow does so explicitly.
