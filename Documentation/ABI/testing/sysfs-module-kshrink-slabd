@@ -1,0 +1,7 @@
+What:		/sys/module/kshrink_slabd/parameters/enabled
+Date:		October 2026
+Description:	Runtime boolean switch for CONFIG_KSHRINK_SLABD, when built
+		in. Disabling prevents new asynchronous requests; one pending
+		or running request may finish. Direct reclaim, drop_caches,
+		severe pressure and a busy worker remain synchronous. The
+		option is off in the default configuration.

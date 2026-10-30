@@ -58,6 +58,8 @@
 #include <linux/balloon_compaction.h>
 
 #include "internal.h"
+#include "mi_rmap_efficiency.h"
+#include <linux/sizes.h>
 
 #ifdef CONFIG_RTMM
 #include <linux/rtmm.h>
@@ -134,6 +136,9 @@ struct scan_control {
 
 	/* Incremented by the number of inactive pages that were scanned */
 	unsigned long nr_scanned;
+#ifdef CONFIG_MI_RMAP_EFFICIENCY
+	unsigned long nr_mi_rmap_protected;
+#endif
 
 	/* Number of pages freed so far during a call to shrink_zones() */
 	unsigned long nr_reclaimed;
@@ -722,7 +727,7 @@ static unsigned long shrink_slab_memcg(gfp_t gfp_mask, int nid,
  *
  * Returns the number of reclaimed slab objects.
  */
-static unsigned long shrink_slab(gfp_t gfp_mask, int nid,
+unsigned long shrink_slab(gfp_t gfp_mask, int nid,
 				 struct mem_cgroup *memcg,
 				 int priority)
 {
@@ -1146,6 +1151,15 @@ static void page_check_dirty_writeback(struct page *page,
 		mapping->a_ops->is_dirty_writeback(page, dirty, writeback);
 }
 
+#ifdef CONFIG_MI_RMAP_EFFICIENCY
+static bool mi_rmap_may_protect(struct scan_control *sc, bool force_reclaim)
+{
+	return !force_reclaim && global_reclaim(sc) && !sc->order &&
+		!(sc->gfp_mask & (__GFP_DMA | __GFP_DMA32)) &&
+		si_mem_available() > (long)(SZ_512M >> PAGE_SHIFT);
+}
+#endif
+
 /*
  * shrink_page_list() returns the number of reclaimed pages
  */
@@ -1167,6 +1181,9 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 	unsigned nr_immediate = 0;
 	unsigned nr_ref_keep = 0;
 	unsigned nr_unmap_fail = 0;
+#ifdef CONFIG_MI_RMAP_EFFICIENCY
+	bool protect_highmap = mi_rmap_may_protect(sc, force_reclaim);
+#endif
 
 	cond_resched();
 
@@ -1309,8 +1326,25 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 			}
 		}
 
-		if (!force_reclaim)
-			references = page_check_references(page, sc);
+		if (!force_reclaim) {
+#ifdef CONFIG_MI_RMAP_EFFICIENCY
+			if (protect_highmap) {
+				switch (mi_rmap_check(page, sc->nr_scanned,
+					sc->priority, &sc->nr_mi_rmap_protected)) {
+				case MI_RMAP_ACTIVATE:
+					references = PAGEREF_ACTIVATE;
+					break;
+				case MI_RMAP_KEEP:
+					references = PAGEREF_KEEP;
+					break;
+				case MI_RMAP_RECLAIM:
+					break;
+				}
+			}
+#endif
+			if (references == PAGEREF_RECLAIM)
+				references = page_check_references(page, sc);
+		}
 
 		switch (references) {
 		case PAGEREF_ACTIVATE:
@@ -2936,8 +2970,10 @@ static bool shrink_node(pg_data_t *pgdat, struct scan_control *sc)
 			shrink_node_memcg(pgdat, memcg, sc, &lru_pages);
 			node_lru_pages += lru_pages;
 
-			shrink_slab(sc->gfp_mask, pgdat->node_id, memcg,
-					sc->priority);
+			if (!wakeup_kshrink_slabd(sc->gfp_mask, pgdat->node_id,
+						 memcg, sc->priority))
+				shrink_slab(sc->gfp_mask, pgdat->node_id, memcg,
+					    sc->priority);
 
 			/* Record the group's reclaim efficiency */
 			vmpressure(sc->gfp_mask, memcg, false,

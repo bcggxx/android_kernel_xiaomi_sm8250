@@ -99,6 +99,35 @@ jobs:
         echo "Executing command: ./build_kernel.sh $ARGS"
         ./build_kernel.sh $ARGS
 
+    # Shipping ZIPs retain their default configuration. Check opt-in memory
+    # code in a separate output tree, using the same ARM64 toolchain.
+    - name: Check opt-in memory objects (dagu)
+      if: ${{ github.event.inputs.device == 'dagu' }}
+      timeout-minutes: 10
+      run: |
+        export PATH="$HOME/zyc-clang/bin:$PATH"
+        export CCACHE_DIR="$HOME/.cache/ccache_mikernel"
+        kernel_mm_config=""
+        for kernel_mm_candidate in out_miui/.config out_aosp/.config; do
+          if [ -f "$kernel_mm_candidate" ]; then
+            kernel_mm_config="$kernel_mm_candidate"
+            break
+          fi
+        done
+        test -n "$kernel_mm_config"
+        mkdir -p out_dagu_mm_check
+        cp "$kernel_mm_config" out_dagu_mm_check/.config
+        scripts/config --file out_dagu_mm_check/.config \
+          -e KSHRINK_SLABD -e MI_RMAP_EFFICIENCY
+        kernel_mm_args=(O=out_dagu_mm_check ARCH=arm64 SUBARCH=arm64 \
+          LLVM=1 LLVM_IAS=1 CC="ccache clang" HOSTCC="ccache clang" \
+          CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-)
+        make "${kernel_mm_args[@]}" olddefconfig
+        grep -qx CONFIG_KSHRINK_SLABD=y out_dagu_mm_check/.config
+        grep -qx CONFIG_MI_RMAP_EFFICIENCY=y out_dagu_mm_check/.config
+        make "${kernel_mm_args[@]}" -j2 \
+          mm/vmscan.o mm/kshrink_slabd.o mm/mi_rmap_efficiency.o
+
     - name: Upload Flashable ZIP
       uses: actions/upload-artifact@v7
       with:

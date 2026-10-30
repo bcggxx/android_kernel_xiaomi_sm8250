@@ -1,0 +1,11 @@
+What:		/sys/kernel/mi_rmap_efficiency/enabled
+Date:		October 2026
+Description:	Boolean runtime switch for CONFIG_MI_RMAP_EFFICIENCY. The
+		optional built-in is disabled in the default configuration.
+		When built in, policy starts after successful sysfs setup.
+
+What:		/sys/kernel/mi_rmap_efficiency/mapcount_thres
+Date:		October 2026
+Description:	High-mapcount file-page activation threshold, default 20.
+		Valid values are 2 through INT_MAX. Low-memory, allocation
+		context and scan-budget limits still apply.

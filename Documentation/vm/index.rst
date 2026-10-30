@@ -13,6 +13,8 @@ various features of the Linux memory management
 .. toctree::
    :maxdepth: 1
 
+   kshrink_slabd
+   mi_rmap_efficiency
    swap_numa
    zswap
 

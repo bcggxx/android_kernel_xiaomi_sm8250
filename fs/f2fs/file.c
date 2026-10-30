@@ -6,6 +6,7 @@
  *             http://www.samsung.com/
  */
 #include <linux/fs.h>
+#include <linux/fadvise.h>
 #include <linux/f2fs_fs.h>
 #include <linux/stat.h>
 #include <linux/buffer_head.h>
@@ -4760,8 +4761,34 @@ long f2fs_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 }
 #endif
 
+static int f2fs_file_fadvise(struct file *file, loff_t offset, loff_t len,
+			     int advice)
+{
+	struct inode *inode = file_inode(file);
+	struct backing_dev_info *bdi;
+	unsigned long ra_pages;
+	unsigned int multiplier;
+	int ret;
+
+	/* Keep generic validation and the semantics of every advice option. */
+	ret = generic_fadvise(file, offset, len, advice);
+	if (ret || advice != POSIX_FADV_SEQUENTIAL || IS_DAX(inode))
+		return ret;
+
+	bdi = inode_to_bdi(file->f_mapping->host);
+	if (bdi == &noop_backing_dev_info)
+		return 0;
+
+	ra_pages = READ_ONCE(bdi->ra_pages);
+	multiplier = READ_ONCE(F2FS_I_SB(inode)->seq_file_ra_mul);
+	file->f_ra.ra_pages = ra_pages > UINT_MAX / multiplier ?
+			     UINT_MAX : (unsigned int)(ra_pages * multiplier);
+	return 0;
+}
+
 const struct file_operations f2fs_file_operations = {
 	.llseek		= f2fs_llseek,
+	.fadvise	= f2fs_file_fadvise,
 	.read_iter	= f2fs_file_read_iter,
 	.write_iter	= f2fs_file_write_iter,
 	.open		= f2fs_file_open,

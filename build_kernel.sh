@@ -78,8 +78,31 @@ if [ "$ENABLE_KSU" -eq 1 ]; then
     echo "==========================================="
     echo " [*] Initializing KernelSU (ReSukiSU) Setup"
     echo "==========================================="
-    echo "[*] Downloading and running ReSukiSU remote setup script..."
-    curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+    # Match the successful 2026-10-02 dagu MIUI/SUSFS/DroidSpaces build.
+    # Moving main now requires a newer SUSFS kernel API.
+    RESUKISU_REF="${RESUKISU_REF:-34210a4dec297cb48ce4bfa1c5ba50a2f7d22641}"
+    if [[ ! "$RESUKISU_REF" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "[!] RESUKISU_REF must be a full commit SHA."
+        exit 1
+    fi
+    echo "[*] Setting up ReSukiSU at $RESUKISU_REF..."
+    KSU_SETUP_SCRIPT=$(mktemp)
+    if ! curl -fLSs --connect-timeout 15 --max-time 120 --retry 2 \
+        "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/$RESUKISU_REF/kernel/setup.sh" \
+        -o "$KSU_SETUP_SCRIPT"; then
+        rm -f "$KSU_SETUP_SCRIPT"
+        exit 1
+    fi
+    if ! GIT_TERMINAL_PROMPT=0 timeout -k 5s 300s \
+        bash "$KSU_SETUP_SCRIPT" "$RESUKISU_REF"; then
+        rm -f "$KSU_SETUP_SCRIPT"
+        exit 1
+    fi
+    rm -f "$KSU_SETUP_SCRIPT"
+    if [[ "$(git -C "$KERNEL_DIR/KernelSU" rev-parse HEAD)" != "$RESUKISU_REF" ]]; then
+        echo "[!] KernelSU checkout does not match the requested commit."
+        exit 1
+    fi
     echo "[+] KernelSU setup finished."
 fi
 

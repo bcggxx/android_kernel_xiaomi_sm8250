@@ -1,3 +1,8 @@
 config BINDER_PRIO
 	tristate "Xiaomi binder prio"
 	default n
+	help
+	  Apply a transaction-scoped RT floor to selected synchronous graphics
+	  and camera transactions from RT senders. Receiver RT limits still
+	  apply, stronger priorities are retained, and the Binder core restores
+	  the previous priority. This does not reorder one-way transactions.

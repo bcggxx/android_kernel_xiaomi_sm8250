@@ -15,6 +15,7 @@ available subsections can be seen below.
    :maxdepth: 2
 
    basics
+   binder-priority
    infrastructure
    pm/index
    clk
