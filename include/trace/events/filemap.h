@@ -54,6 +54,38 @@ DEFINE_EVENT(mm_filemap_op_page_cache, mm_filemap_add_to_page_cache,
 	TP_ARGS(page)
 	);
 
+TRACE_EVENT(filemap_readahead_window,
+	TP_PROTO(struct address_space *mapping, pgoff_t start_index,
+		 unsigned long nr_pages, unsigned long lookahead_pages),
+
+	TP_ARGS(mapping, start_index, nr_pages, lookahead_pages),
+
+	TP_STRUCT__entry(
+		__field(unsigned long, i_ino)
+		__field(dev_t, s_dev)
+		__field(pgoff_t, start_index)
+		__field(unsigned long, nr_pages)
+		__field(unsigned long, lookahead_pages)
+	),
+
+	TP_fast_assign(
+		__entry->i_ino = mapping->host->i_ino;
+		if (mapping->host->i_sb)
+			__entry->s_dev = mapping->host->i_sb->s_dev;
+		else
+			__entry->s_dev = mapping->host->i_rdev;
+		__entry->start_index = start_index;
+		__entry->nr_pages = nr_pages;
+		__entry->lookahead_pages = lookahead_pages;
+	),
+
+	TP_printk("dev=%u:%u ino=0x%lx candidate_start_index=%lu "
+		  "candidate_pages=%lu lookahead_pages=%lu",
+		  MAJOR(__entry->s_dev), MINOR(__entry->s_dev), __entry->i_ino,
+		  (unsigned long)__entry->start_index, __entry->nr_pages,
+		  __entry->lookahead_pages)
+);
+
 TRACE_EVENT(filemap_set_wb_err,
 		TP_PROTO(struct address_space *mapping, errseq_t eseq),
 

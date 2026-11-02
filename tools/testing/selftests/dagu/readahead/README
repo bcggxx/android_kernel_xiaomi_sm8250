@@ -42,5 +42,13 @@ not prove a cold cache: freshly written files may remain resident. They do
 not measure demand-versus-speculative IO, window limits, cgroup switching,
 pressure transitions, concurrency or optimization benefit. Do not use their
 PASS output to authorize a readahead policy. No global drop_caches is used.
-Target window trace events, explicit cache preparation and file/inode IO
-correlation remain separate prerequisites before policy implementation.
+The kernel's `filemap:filemap_readahead_window` trace event records the
+candidate page range and async lookahead at the common page-cache submit
+point. It covers read and mmap submit paths that reach this helper, but it
+does not identify which API caused an event, separate demand pages from
+speculation, or prove that every candidate page became storage I/O. Run
+read and mmap workloads in separately controlled trials and correlate with
+file/inode I/O evidence. This event alone does not satisfy the observation
+contract or authorize a readahead policy; cgroup identity, pressure state,
+demand-versus-speculative attribution and target-device validation remain
+open. The target cost of enabling this event has not been measured.

@@ -21,6 +21,7 @@
 #include <linux/mm_inline.h>
 #include <linux/blk-cgroup.h>
 #include <linux/fadvise.h>
+#include <trace/events/filemap.h>
 
 #include "internal.h"
 
@@ -161,6 +162,10 @@ unsigned int __do_page_cache_readahead(struct address_space *mapping,
 	unsigned int nr_pages = 0;
 	loff_t isize = i_size_read(inode);
 	gfp_t gfp_mask = readahead_gfp_mask(mapping);
+
+	/* This is the candidate range, before EOF and page-cache filtering. */
+	trace_filemap_readahead_window(mapping, offset, nr_to_read,
+				       lookahead_size);
 
 	if (isize == 0)
 		goto out;
