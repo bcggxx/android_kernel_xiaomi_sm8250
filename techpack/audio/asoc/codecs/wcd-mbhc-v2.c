@@ -36,6 +36,9 @@
 	defined(CONFIG_DEBUG_FS)
 #include <linux/debugfs.h>
 
+#define DEBUGFS_DIR_NAME "mbhc"
+#define DEBUGFS_HEADSET_STATUS_FILE_NAME "headset_status"
+
 #define HEADSET_STATUS_RECORD_INDEX_PLUGIN_HEADSET (3)
 #define HEADSET_STATUS_RECORD_INDEX_PLUGIN_HEADPHONE (1)
 #define HEADSET_STATUS_RECORD_INDEX_PLUGOUT (0)
@@ -101,7 +104,8 @@ EXPORT_SYMBOL(wcd_mbhc_jack_report);
      defined(CONFIG_TARGET_PRODUCT_DAGU) || \
      defined(CONFIG_TARGET_PRODUCT_PIPA)) &&  \
 	defined(CONFIG_DEBUG_FS)
-static void add_headset_event(int status, int mask, int jackstatus) {
+static void __maybe_unused add_headset_event(int status, int mask, int jackstatus)
+{
 	if (status == HEADSET_STATUS_RECORD_INDEX_PLUGOUT) {
 		headset_status[4] = maxF(headset_status[4], HEADSET_EVENT_PLUGOUT_HEADPHONE);
 		headset_status[4] = maxF(headset_status[4], HEADSET_EVENT_PLUGOUT_MICROPHONE);
