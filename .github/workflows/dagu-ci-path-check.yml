@@ -1,0 +1,14 @@
+name: Dagu CI path coverage
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  paths:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 tools/ci/test_dagu_ci_paths.py
+      - run: python3 tools/ci/check_dagu_ci_paths.py
