@@ -2172,9 +2172,15 @@ find_page:
 				goto would_block;
 			trace_filemap_readahead_request(mapping, FILEMAP_RA_READ_SYNC,
 						 index, last_index - index);
-			page_cache_sync_readahead(mapping,
-					ra, filp,
-					index, last_index - index);
+#ifdef CONFIG_READAHEAD_LIMIT
+			page_cache_sync_readahead_ctx(mapping, ra, filp,
+				index, last_index - index, &(struct ra_context) {
+					index, last_index - index, FILEMAP_RA_READ_SYNC
+				});
+#else
+			page_cache_sync_readahead(mapping, ra, filp,
+						 index, last_index - index);
+#endif
 			page = find_get_page(mapping, index);
 			if (unlikely(page == NULL))
 				goto no_cached_page;
@@ -2182,9 +2188,15 @@ find_page:
 		if (PageReadahead(page)) {
 			trace_filemap_readahead_request(mapping, FILEMAP_RA_READ_ASYNC,
 						 index, last_index - index);
-			page_cache_async_readahead(mapping,
-					ra, filp, page,
-					index, last_index - index);
+#ifdef CONFIG_READAHEAD_LIMIT
+			page_cache_async_readahead_ctx(mapping, ra, filp, page,
+				index, last_index - index, &(struct ra_context) {
+					index, last_index - index, FILEMAP_RA_READ_ASYNC
+				});
+#else
+			page_cache_async_readahead(mapping, ra, filp, page,
+						  index, last_index - index);
+#endif
 		}
 		if (!PageUptodate(page)) {
 			if (iocb->ki_flags & IOCB_NOWAIT) {
@@ -2521,8 +2533,14 @@ static struct file *do_sync_mmap_readahead(struct vm_fault *vmf)
 		fpin = maybe_unlock_mmap_for_io(vmf, fpin);
 		trace_filemap_readahead_request(mapping, FILEMAP_RA_MMAP_SEQ,
 						 offset, 1);
-		page_cache_sync_readahead(mapping, ra, file, offset,
-					  ra->ra_pages);
+#ifdef CONFIG_READAHEAD_LIMIT
+		page_cache_sync_readahead_ctx(mapping, ra, file, offset,
+			ra->ra_pages, &(struct ra_context) {
+				offset, 1, FILEMAP_RA_MMAP_SEQ
+			});
+#else
+		page_cache_sync_readahead(mapping, ra, file, offset, ra->ra_pages);
+#endif
 		return fpin;
 	}
 
@@ -2546,7 +2564,13 @@ static struct file *do_sync_mmap_readahead(struct vm_fault *vmf)
 	ra->async_size = ra->ra_pages / 4;
 	trace_filemap_readahead_request(mapping, FILEMAP_RA_MMAP_READAROUND,
 					 offset, 1);
+#ifdef CONFIG_READAHEAD_LIMIT
+	ra_submit_ctx(ra, mapping, file, &(struct ra_context) {
+		offset, 1, FILEMAP_RA_MMAP_READAROUND
+	});
+#else
 	ra_submit(ra, mapping, file);
+#endif
 	return fpin;
 }
 
@@ -2573,8 +2597,15 @@ static struct file *do_async_mmap_readahead(struct vm_fault *vmf,
 		fpin = maybe_unlock_mmap_for_io(vmf, fpin);
 		trace_filemap_readahead_request(mapping, FILEMAP_RA_MMAP_ASYNC,
 						 offset, 1);
-		page_cache_async_readahead(mapping, ra, file,
-					   page, offset, ra->ra_pages);
+#ifdef CONFIG_READAHEAD_LIMIT
+		page_cache_async_readahead_ctx(mapping, ra, file, page, offset,
+			ra->ra_pages, &(struct ra_context) {
+				offset, 1, FILEMAP_RA_MMAP_ASYNC
+			});
+#else
+		page_cache_async_readahead(mapping, ra, file, page, offset,
+					   ra->ra_pages);
+#endif
 	}
 	return fpin;
 }

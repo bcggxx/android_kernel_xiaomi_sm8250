@@ -114,3 +114,5 @@ obj-$(CONFIG_PROCESS_RECLAIM)	+= process_reclaim.o
 
 obj-$(CONFIG_KSHRINK_SLABD) += kshrink_slabd.o
 obj-$(CONFIG_MI_RMAP_EFFICIENCY) += mi_rmap_efficiency.o
+
+obj-$(CONFIG_READAHEAD_LIMIT) += readahead_limit.o

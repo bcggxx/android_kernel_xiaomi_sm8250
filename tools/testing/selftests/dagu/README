@@ -34,3 +34,9 @@ comments, but is not a general-purpose C parser.
 This kernel's legacy TAP runner reports failures as "not ok ... [FAIL]"
 without setting a failing exit status. Consumers must check the TAP results;
 the Dagu host checks workflow does so explicitly.
+
+`test_limited_readahead.py` extracts the actual raw range and control parser
+helpers. Literal contract examples, empty/overflow/async/marker and strict
+input bounds are host arithmetic/interface checks only. Kernel CSS/RCU,
+concurrency, IO and real policy decisions require a new experimental kernel;
+see Documentation/vm/readahead-limit.rst.

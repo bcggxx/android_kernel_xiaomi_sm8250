@@ -30,7 +30,7 @@ static void usage(const char *program)
 {
 	fprintf(stderr,
 		"usage: %s read|mmap FILE OFFSET LENGTH [--dontneed] "
-		"[--sequential|--random]\n",
+		"[--sequential|--random] [--fd-random (mmap only)]\n",
 		program);
 }
 
@@ -204,6 +204,7 @@ int main(int argc, char **argv)
 	int fd, mmap_mode, dontneed = 0, cache_error = 0;
 	int hint = HINT_NONE, hint_applied = 0, dontneed_seen = 0;
 	int operation_error = 0, data_ok = 1;
+	int fd_random = 0;
 	int mincore_request_error, mincore_file_error, mincore_error;
 	const char *cold, *data_status = "ok", *operation = "complete";
 	const char *final_status = "pass";
@@ -236,6 +237,11 @@ int main(int argc, char **argv)
 				return 2;
 			}
 			dontneed = 1;
+		} else if (!strcmp(argv[i], "--fd-random")) {
+			if (!mmap_mode || fd_random++) {
+				fprintf(stderr, "--fd-random requires mmap, once\n");
+				return 2;
+			}
 		} else if (!strcmp(argv[i], "--sequential") ||
 			   !strcmp(argv[i], "--random")) {
 			if (hint != HINT_NONE) {
@@ -326,6 +332,17 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		cold = "unclaimed";
+	}
+
+	if (fd_random) {
+		cache_error = posix_fadvise(fd, (off_t)offset, (off_t)length,
+					   POSIX_FADV_RANDOM);
+		if (cache_error) {
+			fprintf(stderr, "posix_fadvise(random): %s\n",
+				strerror(cache_error));
+			close(fd);
+			return 1;
+		}
 	}
 
 	if (hint != HINT_NONE && !mmap_mode) {
@@ -453,6 +470,7 @@ int main(int argc, char **argv)
 	       mode, file_size, offset, length, elapsed_ns,
 	       dontneed ? "dontneed" : "none", cold);
 	print_hint(hint, mmap_mode, hint_applied);
+	printf(" fd_random=%s", fd_random ? "applied" : "none");
 	if (mmap_mode) {
 		printf(" mmap_offset=%" PRIu64 " mmap_length=%" PRIu64
 		       " touch_offset=%" PRIu64 " touched_byte=%u data=%s",

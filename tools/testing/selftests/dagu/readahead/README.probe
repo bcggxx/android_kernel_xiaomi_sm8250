@@ -87,3 +87,11 @@ Example invocations on a known fixture:
 
 The fixture must contain the expected byte pattern. The `--dontneed` form is
 explicitly opt-in and should be limited to a dedicated fixture file.
+
+For the limited-readahead experiment, mmap also accepts `--fd-random` once,
+independently of the VMA `--sequential`/`--random` hint. It applies
+POSIX_FADV_RANDOM to this open fd before mmap, reports `fd_random=applied`,
+and combines with `--sequential` to exercise FMODE_RANDOM + VM_SEQ_READ.
+Read mode rejects this option. A cold-preparation skip occurs before applying
+it. This is a workload trigger, not evidence of a limit; inspect the actual
+kernel decision event's demand_size=1, force=1 and raw/final tuples.

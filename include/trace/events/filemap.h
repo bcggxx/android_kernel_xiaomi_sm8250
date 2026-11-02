@@ -7,6 +7,7 @@
 
 #include <linux/types.h>
 #include <linux/tracepoint.h>
+#include <linux/readahead_limit.h>
 #include <linux/mm.h>
 #include <linux/memcontrol.h>
 #include <linux/device.h>
@@ -142,6 +143,62 @@ TRACE_EVENT(filemap_readahead_window,
 		  __entry->lookahead_pages, __entry->cpuset_id,
 		  __entry->cpuset_root, __entry->cpuset_state,
 		  __entry->available_pages, __entry->available_ns)
+);
+
+/* Real decision inputs; the window event remains a later resample. */
+TRACE_EVENT(filemap_readahead_decision,
+	TP_PROTO(struct address_space *mapping,
+		 const struct readahead_limit_sample *sample),
+	TP_ARGS(mapping, sample),
+	TP_STRUCT__entry(
+		__field(unsigned long, i_ino)
+		__field(dev_t, s_dev)
+		__field(unsigned int, source)
+		__field(unsigned long, demand)
+		__field(unsigned long, demand_size)
+		__field(unsigned long, raw_start)
+		__field(unsigned long, raw_size)
+		__field(unsigned long, raw_async)
+		__field(unsigned long, final_start)
+		__field(unsigned long, final_size)
+		__field(unsigned long, final_async)
+		__field(bool, force)
+		__field(int, reason)
+		__field(u64, identity)
+		__field(u64, target_identity)
+		__field(long, available)
+		__field(u64, generation)
+	),
+	TP_fast_assign(
+		__entry->i_ino = mapping->host->i_ino;
+		__entry->s_dev = mapping->host->i_sb->s_dev;
+		__entry->source = sample->source;
+		__entry->demand = sample->demand;
+		__entry->demand_size = sample->demand_size;
+		__entry->raw_start = sample->raw_start;
+		__entry->raw_size = sample->raw_size;
+		__entry->raw_async = sample->raw_async;
+		__entry->final_start = sample->final_start;
+		__entry->final_size = sample->final_size;
+		__entry->final_async = sample->final_async;
+		__entry->force = sample->force;
+		__entry->reason = sample->reason;
+		__entry->identity = sample->identity;
+		__entry->target_identity = sample->target_identity;
+		__entry->available = sample->available;
+		__entry->generation = sample->generation;
+	),
+	TP_printk("ino=%lu dev=%u:%u source=%u demand=%lu demand_size=%lu "
+		  "raw_start=%lu raw_size=%lu raw_async=%lu final_start=%lu "
+		  "final_size=%lu final_async=%lu reason=%d identity=%llu "
+		  "target_identity=%llu available=%ld generation=%llu force=%u",
+		  __entry->i_ino, MAJOR(__entry->s_dev), MINOR(__entry->s_dev),
+		  __entry->source, __entry->demand, __entry->demand_size,
+		  __entry->raw_start, __entry->raw_size, __entry->raw_async,
+		  __entry->final_start, __entry->final_size, __entry->final_async,
+		  __entry->reason, __entry->identity, __entry->target_identity,
+		  __entry->available,
+		  __entry->generation, __entry->force)
 );
 
 TRACE_EVENT(filemap_set_wb_err,

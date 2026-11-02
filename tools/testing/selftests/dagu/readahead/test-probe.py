@@ -73,6 +73,13 @@ with tempfile.TemporaryDirectory() as directory:
               mmap_length=(4103 % page_size) + 17,
               touch_offset=4103, touched_byte=7, data='ok')
 
+    result = run('mmap', fixture, 4103, 17, '--fd-random', '--sequential')
+    expect_ok(result, hint='sequential', hint_api='madvise',
+              hint_status='applied', fd_random='applied', data='ok')
+    assert run('read', fixture, 0, 1, '--fd-random').returncode == 2
+    assert run('mmap', fixture, 0, 1, '--fd-random',
+               '--fd-random').returncode == 2
+
     for hint in ('sequential', 'random'):
         result = run('read', fixture, 4096, 4096, f'--{hint}')
         expect_ok(result, hint=hint, hint_api='posix_fadvise',
