@@ -9,6 +9,12 @@ on:
       - mm/kshrink_slabd.c
       - mm/mi_rmap_efficiency.c
       - mm/mi_rmap_efficiency.h
+      - mm/readahead_limit.c
+      - mm/readahead.c
+      - mm/filemap.c
+      - mm/internal.h
+      - include/linux/readahead_limit.h
+      - include/trace/events/filemap.h
       - mm/vmscan.c
       - mm/zsmalloc.c
       - drivers/staging/binder_prio/binder_prio.c
