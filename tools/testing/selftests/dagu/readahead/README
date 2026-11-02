@@ -1,0 +1,46 @@
+Dagu real file-access workload (observation only)
+================================================
+
+This standalone workload changes no kernel settings. It opens an existing
+fixture read-only and verifies every byte through read, mmap, or both on one
+file description. Fixture byte N must equal N modulo 256. Each invocation
+opens a new file description. sequential/random apply POSIX_FADV_* to read;
+they are not mmap advice coverage. Empty mmap fixtures are accepted without
+issuing the invalid zero-length mmap syscall.
+
+Build and verify the workload in the Linux container:
+
+  cc -O2 -Wall -Wextra -Werror -static -o /tmp/dagu-ra-workload workload.c
+  python3 test-workload.py /tmp/dagu-ra-workload
+
+The test creates known fixtures at zero, 1, 4095, 4096, 4097 and 1048589 bytes,
+checks all modes, then checks rejection of corrupt content. The host kernel
+is not a substitute for Android execution. Native static AArch64 output can
+also run on the Android target. On other hosts use an AArch64 static compiler.
+
+Create a target fixture (container):
+
+  python3 - <<'PY'
+  from pathlib import Path
+  Path('/tmp/dagu-ra-fixture').write_bytes(bytes(range(256)) * 4096)
+  PY
+
+Transfer and run (container, target serial must be confirmed first):
+
+  timeout -k 2s 15s adb -s emulator-5554 push /tmp/dagu-ra-workload /data/local/tmp/dagu-phase1-workload
+  timeout -k 2s 15s adb -s emulator-5554 push /tmp/dagu-ra-fixture /data/local/tmp/dagu-phase1-fixture
+  timeout -k 2s 15s adb -s emulator-5554 shell 'chmod 755 /data/local/tmp/dagu-phase1-workload; /data/local/tmp/dagu-phase1-workload mixed /data/local/tmp/dagu-phase1-fixture'
+
+On offline, inspect `adb devices`, reconnect this serial and retry at most
+once. Persistent hangs require a bounded server restart and restoring the
+original connection. Before repeating transfers or other mutations inspect
+the destination and checksum; do not blindly repeat side effects. The
+workload itself only reads the fixture and is safe to repeat.
+
+These checks prove data/length correctness for these inputs only. They do
+not prove a cold cache: freshly written files may remain resident. They do
+not measure demand-versus-speculative IO, window limits, cgroup switching,
+pressure transitions, concurrency or optimization benefit. Do not use their
+PASS output to authorize a readahead policy. No global drop_caches is used.
+Target window trace events, explicit cache preparation and file/inode IO
+correlation remain separate prerequisites before policy implementation.
