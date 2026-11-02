@@ -54,11 +54,55 @@ DEFINE_EVENT(mm_filemap_op_page_cache, mm_filemap_add_to_page_cache,
 	TP_ARGS(page)
 	);
 
+/* Request sources describe call sites, not the eventual I/O submitted. */
+#ifndef FILEMAP_RA_SOURCE_DEFINED
+#define FILEMAP_RA_SOURCE_DEFINED
+enum filemap_readahead_source {
+	FILEMAP_RA_READ_SYNC = 0,
+	FILEMAP_RA_READ_ASYNC,
+	FILEMAP_RA_MMAP_SEQ,
+	FILEMAP_RA_MMAP_READAROUND,
+	FILEMAP_RA_MMAP_ASYNC,
+};
+#endif
+
+TRACE_EVENT(filemap_readahead_request,
+	TP_PROTO(struct address_space *mapping, unsigned int source,
+		 pgoff_t demand_start, unsigned long demand_pages),
+
+	TP_ARGS(mapping, source, demand_start, demand_pages),
+
+	TP_STRUCT__entry(
+		__field(unsigned long, i_ino)
+		__field(dev_t, s_dev)
+		__field(unsigned int, source)
+		__field(pgoff_t, demand_start)
+		__field(unsigned long, demand_pages)
+	),
+
+	TP_fast_assign(
+		__entry->i_ino = mapping->host->i_ino;
+		__entry->s_dev = mapping->host->i_sb ?
+			mapping->host->i_sb->s_dev : mapping->host->i_rdev;
+		__entry->source = source;
+		__entry->demand_start = demand_start;
+		__entry->demand_pages = demand_pages;
+	),
+
+	TP_printk("dev=%u:%u ino=0x%lx source=%u demand_start=%lu demand_pages=%lu",
+		  MAJOR(__entry->s_dev), MINOR(__entry->s_dev), __entry->i_ino,
+		  __entry->source, (unsigned long)__entry->demand_start,
+		  __entry->demand_pages)
+);
+
 TRACE_EVENT(filemap_readahead_window,
 	TP_PROTO(struct address_space *mapping, pgoff_t start_index,
-		 unsigned long nr_pages, unsigned long lookahead_pages),
+		 unsigned long nr_pages, unsigned long lookahead_pages,
+		 u64 cpuset_id, int cpuset_root, unsigned int cpuset_state,
+		 long available_pages, u64 available_ns),
 
-	TP_ARGS(mapping, start_index, nr_pages, lookahead_pages),
+	TP_ARGS(mapping, start_index, nr_pages, lookahead_pages, cpuset_id,
+		cpuset_root, cpuset_state, available_pages, available_ns),
 
 	TP_STRUCT__entry(
 		__field(unsigned long, i_ino)
@@ -66,6 +110,11 @@ TRACE_EVENT(filemap_readahead_window,
 		__field(pgoff_t, start_index)
 		__field(unsigned long, nr_pages)
 		__field(unsigned long, lookahead_pages)
+		__field(u64, cpuset_id)
+		__field(int, cpuset_root)
+		__field(unsigned int, cpuset_state)
+		__field(long, available_pages)
+		__field(u64, available_ns)
 	),
 
 	TP_fast_assign(
@@ -77,13 +126,22 @@ TRACE_EVENT(filemap_readahead_window,
 		__entry->start_index = start_index;
 		__entry->nr_pages = nr_pages;
 		__entry->lookahead_pages = lookahead_pages;
+		__entry->cpuset_id = cpuset_id;
+		__entry->cpuset_root = cpuset_root;
+		__entry->cpuset_state = cpuset_state;
+		__entry->available_pages = available_pages;
+		__entry->available_ns = available_ns;
 	),
 
 	TP_printk("dev=%u:%u ino=0x%lx candidate_start_index=%lu "
-		  "candidate_pages=%lu lookahead_pages=%lu",
+		  "candidate_pages=%lu lookahead_pages=%lu cpuset_id=%llu "
+		  "cpuset_root=%d cpuset_state=%u available_pages=%ld "
+		  "available_ns=%llu",
 		  MAJOR(__entry->s_dev), MINOR(__entry->s_dev), __entry->i_ino,
 		  (unsigned long)__entry->start_index, __entry->nr_pages,
-		  __entry->lookahead_pages)
+		  __entry->lookahead_pages, __entry->cpuset_id,
+		  __entry->cpuset_root, __entry->cpuset_state,
+		  __entry->available_pages, __entry->available_ns)
 );
 
 TRACE_EVENT(filemap_set_wb_err,

@@ -21,9 +21,49 @@
 #include <linux/mm_inline.h>
 #include <linux/blk-cgroup.h>
 #include <linux/fadvise.h>
+#include <linux/cgroup.h>
+#include <linux/ktime.h>
 #include <trace/events/filemap.h>
 
 #include "internal.h"
+
+/* Observation only: no sampling on the disabled tracepoint path. */
+static void readahead_trace_window(struct address_space *mapping, pgoff_t offset,
+		unsigned long nr_pages, unsigned long lookahead_pages)
+{
+	u64 cpuset_id = 0, start_ns, available_ns;
+	int cpuset_root = -1;
+	unsigned int cpuset_state = 0;
+	long available_pages;
+#ifdef CONFIG_CPUSETS
+	struct cgroup_subsys_state *css;
+#endif
+
+	if (!trace_filemap_readahead_window_enabled())
+		return;
+
+#ifdef CONFIG_CPUSETS
+	rcu_read_lock();
+	css = task_css(current, cpuset_cgrp_id);
+	if (css) {
+		cpuset_state = 2;
+		if ((READ_ONCE(css->flags) & CSS_ONLINE) &&
+		    !css_is_dying(css)) {
+			cpuset_id = cgroup_id(css->cgroup);
+			cpuset_root = css->cgroup->root->hierarchy_id;
+			cpuset_state = 1;
+		}
+	} else {
+		cpuset_state = 3;
+	}
+	rcu_read_unlock();
+#endif
+	start_ns = ktime_get_ns();
+	available_pages = si_mem_available();
+	available_ns = ktime_get_ns() - start_ns;
+	trace_filemap_readahead_window(mapping, offset, nr_pages, lookahead_pages,
+		cpuset_id, cpuset_root, cpuset_state, available_pages, available_ns);
+}
 
 /*
  * Initialise a struct file's readahead state.  Assumes that the caller has
@@ -164,7 +204,7 @@ unsigned int __do_page_cache_readahead(struct address_space *mapping,
 	gfp_t gfp_mask = readahead_gfp_mask(mapping);
 
 	/* This is the candidate range, before EOF and page-cache filtering. */
-	trace_filemap_readahead_window(mapping, offset, nr_to_read,
+	readahead_trace_window(mapping, offset, nr_to_read,
 				       lookahead_size);
 
 	if (isize == 0)
