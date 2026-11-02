@@ -42,9 +42,15 @@ on:
         type: boolean
         default: false
 
+      readahead_limit:
+        description: 'dagu only: compile experimental readahead limiter (runtime stays off)'
+        required: true
+        type: boolean
+        default: false
+
 jobs:
   build-kernel:
-    name: Build ${{ github.event.inputs.device }} | KSU:${{ github.event.inputs.ksu }} | OS:${{ github.event.inputs.target_os }} | DS:${{ github.event.inputs.droidspaces }}
+    name: Build ${{ github.event.inputs.device }} | RA:${{ github.event.inputs.readahead_limit }} | KSU:${{ github.event.inputs.ksu }} | OS:${{ github.event.inputs.target_os }} | DS:${{ github.event.inputs.droidspaces }}
     # Keep the legacy kernel dependency set on the known-good Ubuntu release.
     runs-on: ubuntu-24.04
     
@@ -97,6 +103,10 @@ jobs:
           ARGS="$ARGS droidspaces"
         fi
         
+        if [ "${{ github.event.inputs.readahead_limit }}" == "true" ]; then
+          ARGS="$ARGS readahead-limit"
+        fi
+
         echo "Executing command: ./build_kernel.sh $ARGS"
         ./build_kernel.sh $ARGS
 
@@ -132,6 +142,6 @@ jobs:
     - name: Upload Flashable ZIP
       uses: actions/upload-artifact@v7
       with:
-        name: APTKernel-${{ github.event.inputs.device }}-${{ github.event.inputs.target_os }}-${{ github.run_id }}
+        name: APTKernel-${{ github.event.inputs.device }}-${{ github.event.inputs.target_os }}-RA${{ github.event.inputs.readahead_limit }}-${{ github.run_id }}
         path: APTKernel_*.zip
         compression-level: 0 # 已经被 zip 压缩过，无需再二次压缩

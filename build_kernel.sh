@@ -8,7 +8,7 @@ set -e
 # ==========================================
 if [ -z "$1" ]; then
     echo "[!] Error: No device specified."
-    echo "Usage: $0 <device_name> [ksu] [miui|aosp] [droidspaces]"
+    echo "Usage: $0 <device_name> [ksu] [miui|aosp] [droidspaces] [readahead-limit]"
     echo "Example: $0 lmi"
     echo "         $0 lmi ksu"
     echo "         $0 lmi ksu miui"
@@ -29,6 +29,7 @@ fi
 
 ENABLE_KSU=0
 ENABLE_DROIDSPACES=0
+ENABLE_READAHEAD_LIMIT=0
 TARGET_OS="both"
 
 shift
@@ -39,8 +40,15 @@ for arg in "$@"; do
         miui) TARGET_OS="miui" ;;
         aosp) TARGET_OS="aosp" ;;
         droidspaces) ENABLE_DROIDSPACES=1 ;;
+        readahead-limit) ENABLE_READAHEAD_LIMIT=1 ;;
     esac
 done
+
+# This experimental build is validated only for dagu; it never enables runtime policy.
+if [ "$ENABLE_READAHEAD_LIMIT" -eq 1 ] && [ "$DEVICE_NAME" != "dagu" ]; then
+    echo "[!] readahead-limit is supported only for dagu."
+    exit 1
+fi
 
 # ==========================================
 # Configuration & Environment
@@ -435,9 +443,24 @@ build_target() {
         scripts/kconfig/merge_config.sh -O "${OUT_DIR}/" -m "${OUT_DIR}/.config" "${DS_CONFIG_FRAG}"
     fi
 
+    # The experimental option is opt-in, independent of the shipped defconfig.
+    if [ "$DEVICE_NAME" = "dagu" ]; then
+        if [ "$ENABLE_READAHEAD_LIMIT" -eq 1 ]; then
+            scripts/config --file "${OUT_DIR}/.config" -e READAHEAD_LIMIT
+        else
+            scripts/config --file "${OUT_DIR}/.config" -d READAHEAD_LIMIT
+        fi
+    fi
+
     # We always need to re-evaluate dependencies because BBG is injected unconditionally
     echo "[*] Updating config (make olddefconfig)..."
     make "${MAKE_OPTS[@]}" olddefconfig
+    if [ "$DEVICE_NAME" = "dagu" ] && [ "$ENABLE_READAHEAD_LIMIT" -eq 1 ]; then
+        grep -qx CONFIG_READAHEAD_LIMIT=y "${OUT_DIR}/.config" || {
+            echo "[!] Experimental READAHEAD_LIMIT did not survive configuration."
+            exit 1
+        }
+    fi
 
     # ----------------------------------------------------
     # Compilation
@@ -480,7 +503,11 @@ build_target() {
         fi
         local GIT_COMMIT_ID=$(git rev-parse --short=8 HEAD 2>/dev/null || echo "unknown")
         local OS_UPPER=$(echo "$OS_TYPE" | tr '[:lower:]' '[:upper:]')
-        local ZIP_FILENAME="APTKernel_${OS_UPPER}_${DEVICE_NAME}_${KSU_ZIP_STR}${DS_ZIP_STR}_$(date +'%Y%m%d_%H%M%S')_anykernel3_${GIT_COMMIT_ID}.zip"
+        local EXPERIMENTAL_ZIP_STR=""
+        if [ "$ENABLE_READAHEAD_LIMIT" -eq 1 ]; then
+            EXPERIMENTAL_ZIP_STR="_ExperimentalReadAhead"
+        fi
+        local ZIP_FILENAME="APTKernel_${OS_UPPER}_${DEVICE_NAME}_${KSU_ZIP_STR}${DS_ZIP_STR}${EXPERIMENTAL_ZIP_STR}_$(date +'%Y%m%d_%H%M%S')_anykernel3_${GIT_COMMIT_ID}.zip"
         
         echo "[*] Zipping $ZIP_FILENAME ..."
         pushd anykernel > /dev/null
