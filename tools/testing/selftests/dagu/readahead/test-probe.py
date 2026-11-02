@@ -27,6 +27,10 @@ def expect_ok(result, **expected):
     actual = fields(result.stdout)
     for key, value in expected.items():
         assert actual.get(key) == str(value), (key, value, actual)
+    if 'hint' not in expected:
+        assert actual.get('hint') == 'none', actual
+        assert actual.get('hint_api') == 'none', actual
+        assert actual.get('hint_status') == 'not-applicable', actual
     assert actual.get('elapsed_ns', '').isdigit(), actual
     for name in ('mincore_file_before', 'mincore_file_after',
                  'mincore_request_before', 'mincore_request_after'):
@@ -68,6 +72,34 @@ with tempfile.TemporaryDirectory() as directory:
               request_length=17, mmap_offset=4103 - 4103 % page_size,
               mmap_length=(4103 % page_size) + 17,
               touch_offset=4103, touched_byte=7, data='ok')
+
+    for hint in ('sequential', 'random'):
+        result = run('read', fixture, 4096, 4096, f'--{hint}')
+        expect_ok(result, hint=hint, hint_api='posix_fadvise',
+                  hint_status='applied', pread_offset=4096,
+                  pread_length=4096, pread_return=4096, data='ok')
+
+        result = run('mmap', fixture, 4103, 17, f'--{hint}')
+        expect_ok(result, hint=hint, hint_api='madvise',
+                  hint_status='applied', touch_offset=4103,
+                  touched_byte=7, data='ok')
+
+    result = run('read', fixture, 4096, 4096,
+                 '--random', '--sequential')
+    assert result.returncode == 2
+    assert 'mutually exclusive' in result.stderr, result.stderr
+
+    result = run('mmap', fixture, 4103, 17,
+                 '--dontneed', '--random')
+    actual = fields(result.stdout)
+    assert actual.get('cache_prep') == 'dontneed', result.stdout
+    assert actual.get('hint') == 'random', result.stdout
+    assert actual.get('hint_api') == 'madvise', result.stdout
+    if result.returncode == 0:
+        assert actual.get('hint_status') == 'applied', result.stdout
+    else:
+        assert actual.get('operation') == 'skipped', result.stdout
+        assert actual.get('hint_status') == 'not-applied', result.stdout
 
     result = run('read', fixture, len(content) - 2, 32)
     expect_ok(result, pread_return=2, data='ok')

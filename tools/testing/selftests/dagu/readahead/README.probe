@@ -4,7 +4,17 @@ Dagu bounded read/mmap observation probe
 `probe.c` runs exactly one bounded file operation per invocation against a
 small fixture whose byte at file offset N is `N mod 256`:
 
-    probe read|mmap FILE OFFSET LENGTH [--dontneed]
+    probe read|mmap FILE OFFSET LENGTH [--dontneed] [--sequential|--random]
+
+The optional access-pattern flags are mutually exclusive and may appear in
+either order relative to `--dontneed`. `--sequential` and `--random` select
+`POSIX_FADV_SEQUENTIAL`/`POSIX_FADV_RANDOM` for read mode, and
+`MADV_SEQUENTIAL`/`MADV_RANDOM` for mmap mode. Read mode applies
+`posix_fadvise` to the requested range before `pread`. Mmap mode creates the
+requested VMA, applies `madvise` to it, then touches the selected byte. Output
+records `hint`, `hint_api`, and `hint_status`; `not-applied` means cache
+preparation prevented the access from running. A successful advisory call
+records its application, not a guaranteed policy effect.
 
 `read` issues one `pread` for the requested offset and length. It retries only
 when the syscall returns `EINTR`; a regular-file short result before EOF is a
@@ -32,8 +42,8 @@ mincore uses separate read-only `MAP_SHARED` mappings.
 `elapsed_ns` uses `CLOCK_MONOTONIC`. In read mode it brackets only the
 `pread` syscall attempt(s), including an `EINTR` retry. In mmap mode it
 brackets only the single-byte load that can fault the page. It excludes file
-open, mapping setup, data checking, mincore, and cache preparation. It is a
-diagnostic sample, not a performance claim.
+open, mapping setup, hint calls, data checking, mincore, and cache preparation.
+It is a diagnostic sample, not a performance claim.
 
 The optional `--dontneed` calls `posix_fadvise(POSIX_FADV_DONTNEED)` for the
 entire fixture (`offset=0`, `length=0`, through EOF). Use it only with a
@@ -58,9 +68,10 @@ container:
 The test creates private temporary fixtures and exercises bounded `pread`,
 mmap alignment and one-byte validation, partial/exact EOF, invalid mmap EOF,
 empty fixtures, corrupt bytes, whole-file and request-range mincore output,
-and the cache-preparation rule including EOF. A successful host test validates this
-userspace contract only; it does not replace target kernel tracing or
-establish demand-versus-speculative I/O.
+both access hints in both modes, conflicting-hint rejection, hint plus cache
+preparation, and the cache-preparation rule including EOF. A successful host
+test validates this userspace contract only; it does not replace target
+kernel tracing or establish demand-versus-speculative I/O.
 
 Example invocations on a known fixture:
 
@@ -70,7 +81,9 @@ Example invocations on a known fixture:
     PY
     /tmp/dagu-readahead-probe read /tmp/dagu-ra-fixture 4096 4096
     /tmp/dagu-readahead-probe mmap /tmp/dagu-ra-fixture 4103 17
-    /tmp/dagu-readahead-probe read /tmp/dagu-ra-fixture 4096 4096 --dontneed
+    /tmp/dagu-readahead-probe read /tmp/dagu-ra-fixture 4096 4096 \
+        --dontneed --sequential
+    /tmp/dagu-readahead-probe mmap /tmp/dagu-ra-fixture 4103 17 --random
 
 The fixture must contain the expected byte pattern. The `--dontneed` form is
 explicitly opt-in and should be limited to a dedicated fixture file.

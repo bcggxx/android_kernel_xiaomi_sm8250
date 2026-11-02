@@ -17,6 +17,10 @@
 #define MAX_EXTENT (16U * 1024U * 1024U)
 #define MAX_REQUEST (1U * 1024U * 1024U)
 
+#define HINT_NONE 0
+#define HINT_SEQUENTIAL 1
+#define HINT_RANDOM 2
+
 struct residency {
 	uint64_t resident;
 	uint64_t pages;
@@ -25,8 +29,53 @@ struct residency {
 static void usage(const char *program)
 {
 	fprintf(stderr,
-		"usage: %s read|mmap FILE OFFSET LENGTH [--dontneed]\n",
+		"usage: %s read|mmap FILE OFFSET LENGTH [--dontneed] "
+		"[--sequential|--random]\n",
 		program);
+}
+
+static const char *hint_name(int hint)
+{
+	switch (hint) {
+	case HINT_SEQUENTIAL:
+		return "sequential";
+	case HINT_RANDOM:
+		return "random";
+	default:
+		return "none";
+	}
+}
+
+static const char *hint_api(int hint, int mmap_mode)
+{
+	if (hint == HINT_NONE)
+		return "none";
+	return mmap_mode ? "madvise" : "posix_fadvise";
+}
+
+static void print_hint(int hint, int mmap_mode, int applied)
+{
+	const char *status = hint == HINT_NONE ? "not-applicable" :
+		(applied ? "applied" : "not-applied");
+
+	printf(" hint=%s hint_api=%s hint_status=%s", hint_name(hint),
+	       hint_api(hint, mmap_mode), status);
+}
+
+static int advise_read_pattern(int fd, uint64_t offset, uint64_t length,
+			       int hint)
+{
+	int advice = hint == HINT_SEQUENTIAL ? POSIX_FADV_SEQUENTIAL :
+		POSIX_FADV_RANDOM;
+
+	return posix_fadvise(fd, (off_t)offset, (off_t)length, advice);
+}
+
+static int advise_mapping_pattern(void *mapping, size_t length, int hint)
+{
+	int advice = hint == HINT_SEQUENTIAL ? MADV_SEQUENTIAL : MADV_RANDOM;
+
+	return madvise(mapping, length, advice);
 }
 
 static int parse_u64(const char *text, uint64_t *value)
@@ -153,12 +202,13 @@ int main(int argc, char **argv)
 	long page_size_value;
 	size_t page_size;
 	int fd, mmap_mode, dontneed = 0, cache_error = 0;
+	int hint = HINT_NONE, hint_applied = 0, dontneed_seen = 0;
 	int operation_error = 0, data_ok = 1;
 	int mincore_request_error, mincore_file_error, mincore_error;
 	const char *cold, *data_status = "ok", *operation = "complete";
 	const char *final_status = "pass";
 
-	if (argc != 5 && argc != 6) {
+	if (argc < 5) {
 		usage(argv[0]);
 		return 2;
 	}
@@ -179,12 +229,26 @@ int main(int argc, char **argv)
 		fprintf(stderr, "request range exceeds 16 MiB bound\n");
 		return 2;
 	}
-	if (argc == 6) {
-		if (strcmp(argv[5], "--dontneed")) {
+	for (int i = 5; i < argc; i++) {
+		if (!strcmp(argv[i], "--dontneed")) {
+			if (dontneed_seen++) {
+				fprintf(stderr, "duplicate --dontneed option\n");
+				return 2;
+			}
+			dontneed = 1;
+		} else if (!strcmp(argv[i], "--sequential") ||
+			   !strcmp(argv[i], "--random")) {
+			if (hint != HINT_NONE) {
+				fprintf(stderr, "--sequential and --random are "
+					"mutually exclusive\n");
+				return 2;
+			}
+			hint = !strcmp(argv[i], "--sequential") ?
+				HINT_SEQUENTIAL : HINT_RANDOM;
+		} else {
 			usage(argv[0]);
 			return 2;
 		}
-		dontneed = 1;
 	}
 	page_size_value = sysconf(_SC_PAGESIZE);
 	if (page_size_value <= 0) {
@@ -235,6 +299,7 @@ int main(int argc, char **argv)
 			       " request_length=%" PRIu64
 			       " cache_prep=dontneed cold=%s operation=skipped",
 			       mode, offset, length, cold);
+			print_hint(hint, mmap_mode, hint_applied);
 			print_residency("mincore_file_before", &file_before);
 			print_residency("mincore_request_before", &request_before);
 			printf(" mincore_file_after=not-run"
@@ -263,6 +328,17 @@ int main(int argc, char **argv)
 		cold = "unclaimed";
 	}
 
+	if (hint != HINT_NONE && !mmap_mode) {
+		cache_error = advise_read_pattern(fd, offset, length, hint);
+		if (cache_error) {
+			fprintf(stderr, "posix_fadvise(%s): %s\n", hint_name(hint),
+				strerror(cache_error));
+			close(fd);
+			return 1;
+		}
+		hint_applied = 1;
+	}
+
 	if (mmap_mode) {
 		page_offset = offset - offset % page_size;
 		mmap_length = offset - page_offset + length;
@@ -272,6 +348,16 @@ int main(int argc, char **argv)
 			perror("mmap");
 			close(fd);
 			return 1;
+		}
+		if (hint != HINT_NONE) {
+			if (advise_mapping_pattern(mapping, (size_t)mmap_length,
+					   hint)) {
+				perror("madvise");
+				munmap(mapping, (size_t)mmap_length);
+				close(fd);
+				return 1;
+			}
+			hint_applied = 1;
 		}
 		if (clock_gettime(CLOCK_MONOTONIC, &started)) {
 			perror("clock_gettime before mmap touch");
@@ -366,6 +452,7 @@ int main(int argc, char **argv)
 	       " cache_prep=%s cold=%s",
 	       mode, file_size, offset, length, elapsed_ns,
 	       dontneed ? "dontneed" : "none", cold);
+	print_hint(hint, mmap_mode, hint_applied);
 	if (mmap_mode) {
 		printf(" mmap_offset=%" PRIu64 " mmap_length=%" PRIu64
 		       " touch_offset=%" PRIu64 " touched_byte=%u data=%s",
