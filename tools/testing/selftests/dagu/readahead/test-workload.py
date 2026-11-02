@@ -16,4 +16,9 @@ with tempfile.TemporaryDirectory() as directory:
     fixture.write_bytes(b'wrong')
     result = subprocess.run([binary, 'read', str(fixture)])
     assert result.returncode != 0, 'corrupt fixture must fail'
+    missing = pathlib.Path(directory) / 'missing'
+    result = subprocess.run([binary, 'read', str(missing)], capture_output=True,
+                            text=True)
+    assert result.returncode != 0, 'missing fixture must fail'
+    assert result.stderr.startswith('open:'), result.stderr
 print('PASS: known data, EOF, hints, mmap and shared-description mixed access')

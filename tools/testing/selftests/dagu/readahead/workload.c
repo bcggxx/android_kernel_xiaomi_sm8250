@@ -41,9 +41,18 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	fd = open(argv[2], O_RDONLY);
-	if (fd < 0 || fstat(fd, &st) || st.st_size < 0 ||
-	    (uintmax_t)st.st_size > SIZE_MAX) {
-		perror("open/stat");
+	if (fd < 0) {
+		perror("open");
+		return 1;
+	}
+	if (fstat(fd, &st)) {
+		perror("fstat");
+		close(fd);
+		return 1;
+	}
+	if (st.st_size < 0 || (uintmax_t)st.st_size > SIZE_MAX) {
+		fprintf(stderr, "invalid file size: %s\n", argv[2]);
+		close(fd);
 		return 1;
 	}
 	mixed = !strcmp(argv[1], "mixed");
