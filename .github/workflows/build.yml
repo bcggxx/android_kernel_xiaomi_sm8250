@@ -45,7 +45,8 @@ on:
 jobs:
   build-kernel:
     name: Build ${{ github.event.inputs.device }} | KSU:${{ github.event.inputs.ksu }} | OS:${{ github.event.inputs.target_os }} | DS:${{ github.event.inputs.droidspaces }}
-    runs-on: ubuntu-latest
+    # Keep the legacy kernel dependency set on the known-good Ubuntu release.
+    runs-on: ubuntu-24.04
     
     steps:
     - name: Checkout Repository
