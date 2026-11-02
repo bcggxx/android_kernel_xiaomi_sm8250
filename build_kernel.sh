@@ -8,7 +8,7 @@ set -e
 # ==========================================
 if [ -z "$1" ]; then
     echo "[!] Error: No device specified."
-    echo "Usage: $0 <device_name> [ksu] [miui|aosp] [droidspaces] [readahead-limit]"
+    echo "Usage: $0 <device_name> [ksu] [miui|aosp] [droidspaces] [readahead-limit] [readahead-faults]"
     echo "Example: $0 lmi"
     echo "         $0 lmi ksu"
     echo "         $0 lmi ksu miui"
@@ -30,6 +30,7 @@ fi
 ENABLE_KSU=0
 ENABLE_DROIDSPACES=0
 ENABLE_READAHEAD_LIMIT=0
+ENABLE_READAHEAD_FAULTS=0
 TARGET_OS="both"
 
 shift
@@ -41,6 +42,7 @@ for arg in "$@"; do
         aosp) TARGET_OS="aosp" ;;
         droidspaces) ENABLE_DROIDSPACES=1 ;;
         readahead-limit) ENABLE_READAHEAD_LIMIT=1 ;;
+        readahead-faults) ENABLE_READAHEAD_FAULTS=1 ;;
     esac
 done
 
@@ -49,6 +51,20 @@ if [ "$ENABLE_READAHEAD_LIMIT" -eq 1 ] && [ "$DEVICE_NAME" != "dagu" ]; then
     echo "[!] readahead-limit is supported only for dagu."
     exit 1
 fi
+
+# Diagnostic capabilities are never selected by ordinary experimental builds.
+if [ "$ENABLE_READAHEAD_FAULTS" -eq 1 ] && {
+    [ "$DEVICE_NAME" != "dagu" ] || [ "$ENABLE_READAHEAD_LIMIT" -ne 1 ] ||
+    [ "$TARGET_OS" != "miui" ];
+}; then
+    echo "[!] readahead-faults requires dagu miui readahead-limit."
+    exit 1
+fi
+DAGU_FAULT_OPTIONS=(DEBUG_KERNEL DEBUG_FS FAULT_INJECTION FAILSLAB
+    FAIL_PAGE_ALLOC FAIL_MAKE_REQUEST FAULT_INJECTION_DEBUG_FS
+    FAULT_INJECTION_STACKTRACE_FILTER)
+DAGU_FAULT_DISABLED=(FAIL_IO_TIMEOUT FAIL_FUTEX FAIL_FUNCTION
+    FAIL_MMC_REQUEST UFS_FAULT_INJECTION)
 
 # ==========================================
 # Configuration & Environment
@@ -452,6 +468,19 @@ build_target() {
         fi
     fi
 
+    if [ "$DEVICE_NAME" = "dagu" ]; then
+        if [ "$ENABLE_READAHEAD_FAULTS" -eq 1 ]; then
+            for fault_option in "${DAGU_FAULT_OPTIONS[@]}"; do
+                scripts/config --file "${OUT_DIR}/.config" -e "$fault_option"
+            done
+            for fault_option in "${DAGU_FAULT_DISABLED[@]}"; do
+                scripts/config --file "${OUT_DIR}/.config" -d "$fault_option"
+            done
+        else
+            scripts/config --file "${OUT_DIR}/.config" -d FAULT_INJECTION
+        fi
+    fi
+
     # We always need to re-evaluate dependencies because BBG is injected unconditionally
     echo "[*] Updating config (make olddefconfig)..."
     make "${MAKE_OPTS[@]}" olddefconfig
@@ -460,6 +489,26 @@ build_target() {
             echo "[!] Experimental READAHEAD_LIMIT did not survive configuration."
             exit 1
         }
+    fi
+
+    if [ "$DEVICE_NAME" = "dagu" ]; then
+        if [ "$ENABLE_READAHEAD_FAULTS" -eq 1 ]; then
+            for fault_option in "${DAGU_FAULT_OPTIONS[@]}"; do
+                grep -qx "CONFIG_${fault_option}=y" "${OUT_DIR}/.config" || {
+                    echo "[!] Diagnostic config missing: $fault_option"
+                    exit 1
+                }
+            done
+            for fault_option in "${DAGU_FAULT_DISABLED[@]}"; do
+                if grep -qx "CONFIG_${fault_option}=y" "${OUT_DIR}/.config"; then
+                    echo "[!] Unexpected diagnostic capability: $fault_option"
+                    exit 1
+                fi
+            done
+        elif grep -qx CONFIG_FAULT_INJECTION=y "${OUT_DIR}/.config"; then
+            echo "[!] Fault injection leaked into a non-diagnostic dagu build."
+            exit 1
+        fi
     fi
 
     # ----------------------------------------------------
@@ -506,6 +555,17 @@ build_target() {
         local EXPERIMENTAL_ZIP_STR=""
         if [ "$ENABLE_READAHEAD_LIMIT" -eq 1 ]; then
             EXPERIMENTAL_ZIP_STR="_ExperimentalReadAhead"
+        fi
+        if [ "$ENABLE_READAHEAD_FAULTS" -eq 1 ]; then
+            EXPERIMENTAL_ZIP_STR="${EXPERIMENTAL_ZIP_STR}_FaultInjectionDiagnostic"
+            mkdir -p anykernel/diagnostics
+            cp "${OUT_DIR}/.config" anykernel/diagnostics/kernel.config
+            printf '%s\n' "source=$(git rev-parse HEAD)" \
+                "purpose=dagu ticket02 allocation and isolated IO error tests" \
+                "faults=capabilities only; no injection armed by this package" \
+                > anykernel/diagnostics/build.txt
+        else
+            rm -rf anykernel/diagnostics
         fi
         local ZIP_FILENAME="APTKernel_${OS_UPPER}_${DEVICE_NAME}_${KSU_ZIP_STR}${DS_ZIP_STR}${EXPERIMENTAL_ZIP_STR}_$(date +'%Y%m%d_%H%M%S')_anykernel3_${GIT_COMMIT_ID}.zip"
         

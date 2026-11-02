@@ -129,3 +129,56 @@ Rollback is enable=0 for subsequent decisions, or rebuild CONFIG_READAHEAD_LIMIT
 and boot that kernel. Existing IO/history is never rolled back. Use fresh opens
 for comparisons requiring untouched readahead history. Performance comparisons
 keep diagnosis off except for separate symmetric confirmation trials.
+
+Diagnostic build for error validation
+-------------------------------------
+
+For the remaining ticket02 allocation/IO-error gate, the manual Build Kernel
+workflow accepts ``readahead_faults=true`` only together with device=dagu,
+target_os=miui and readahead_limit=true. The equivalent container build is::
+
+    ./build_kernel.sh dagu ksu miui droidspaces readahead-limit readahead-faults
+
+The ZIP adds ``FaultInjectionDiagnostic`` to its name and includes the resolved
+``diagnostics/kernel.config`` and source commit in ``diagnostics/build.txt``.
+Ordinary dagu builds explicitly disable FAULT_INJECTION, including ordinary
+readahead experiments. No shipped defconfig or policy runtime default changes.
+The diagnostic build enables debugfs, failslab, fail_page_alloc,
+fail_make_request and stacktrace filtering; unrelated futex/function/MMC/UFS
+and IO-timeout injectors stay disabled. This changes the diagnostic kernel's
+configuration and overhead, so it is not a performance-comparison artifact.
+
+Building or installing this ZIP does not configure an injection. The target
+fault attributes initialize probability=0; block devices require an additional
+make-it-fail opt-in. After boot, verify enable=0, every probability=0, and no
+fault boot arguments before any test. See the target-tree
+Documentation/fault-injection/fault-injection.txt, lib/fault-inject.c,
+mm/failslab.c, mm/page_alloc.c and block/blk-core.c for actual semantics.
+
+Use one injector at a time, task-filter plus a single marked helper, bounded
+failure counts and stack filters where needed. Page-allocation injection in
+this tree defaults to min-order=1 and ignore-gfp-wait=Y; order-0 reclaimable
+page-cache testing needs min-order=0 and ignore-gfp-wait=N. Read back the actual
+controls rather than relying on the generic document's older default text.
+Configure filters while
+probability is zero, arm last, and disarm first in cleanup. Do not use fail-nth
+as an interchangeable alternative: it runs before generic probability,
+task-filter, times and stack-filter checks, and can consume any enabled
+capability reached by that task. Capability-specific GFP/slab checks still
+precede should_fail(). A reader or worker outside the marked task may not be
+covered; record the actual injected stack and decision, not just a knob value.
+
+For fail_make_request, opt in only a newly created disposable loop or DM test
+device backed by a dedicated fixture. Never opt in physical UFS/MMC devices,
+system partitions, active mapped storage or existing loop devices. Verify the
+whole backing chain, read-only test mount and ownership before arming. Task
+filtering alone is insufficient when filesystem work moves to other threads;
+device isolation is mandatory. Restore probability=0 and make-it-fail=0 before
+unmount/detach, preserving artifacts on ambiguous cleanup. These are test
+preconditions, not an automatic test or authorization to inject on user data.
+
+Acceptance still requires evidence of an actual bounded injected failure,
+its relationship to a known read/mmap decision, preserved demand return/error
+semantics, correct retry/recovery after disarming and no new kernel warnings.
+A successful diagnostic build does not close this runtime gate. Boot and
+DroidSpace restoration remain manual in this workspace.
