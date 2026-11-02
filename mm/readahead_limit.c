@@ -230,8 +230,8 @@ bool readahead_limit(struct address_space *mapping, const struct ra_context *ctx
 	cfg = rcu_dereference(ra_limit_config);
 	if (cfg)
 		generation = cfg->generation;
-	if (!ctx) {
-		reason = force ? 9 : 1; /* UNSUPPORTED_EXPLICIT / UNKNOWN_SOURCE */
+	if (!ctx || ctx->source > FILEMAP_RA_MMAP_ASYNC) {
+		reason = !ctx && force ? 9 : 1; /* UNSUPPORTED_EXPLICIT / UNKNOWN_SOURCE */
 		goto out;
 	}
 	if (!cfg || !cfg->enabled)
@@ -261,21 +261,23 @@ bool readahead_limit(struct address_space *mapping, const struct ra_context *ctx
 	reason = clipped < 0 ? 6 : clipped ? 8 : 7;
 out:
 	rcu_read_unlock();
-	sample.force = force;
-	sample.reason = reason;
-	sample.identity = identity;
-	sample.target_identity = target_identity;
-	sample.available = available;
-	sample.generation = generation;
-	sample.source = ctx ? ctx->source : 0;
-	sample.demand = ctx ? ctx->demand : 0;
-	sample.demand_size = ctx ? ctx->demand_size : 0;
-	sample.raw_start = raw_start;
-	sample.raw_size = raw_size;
-	sample.raw_async = raw_async;
-	sample.final_start = *start;
-	sample.final_size = *size;
-	sample.final_async = *async;
-	trace_filemap_readahead_decision(mapping, &sample);
+	if (trace_filemap_readahead_decision_enabled()) {
+		sample.force = force;
+		sample.reason = reason;
+		sample.identity = identity;
+		sample.target_identity = target_identity;
+		sample.available = available;
+		sample.generation = generation;
+		sample.source = ctx ? ctx->source : 0;
+		sample.demand = ctx ? ctx->demand : 0;
+		sample.demand_size = ctx ? ctx->demand_size : 0;
+		sample.raw_start = raw_start;
+		sample.raw_size = raw_size;
+		sample.raw_async = raw_async;
+		sample.final_start = *start;
+		sample.final_size = *size;
+		sample.final_async = *async;
+		trace_filemap_readahead_decision(mapping, &sample);
+	}
 	return clipped > 0;
 }

@@ -967,7 +967,7 @@ config MI_RMAP_EFFICIENCY
 
 config READAHEAD_LIMIT
 	bool "Experimental background raw readahead budget"
-	depends on CPUSETS && SYSFS
+	depends on ARM64 && CPUSETS && SYSFS
 	default n
 	help
 	  Allow root to bind a v1 background cpuset and explicitly enable an
