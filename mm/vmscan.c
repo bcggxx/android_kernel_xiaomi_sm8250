@@ -2220,6 +2220,9 @@ static void shrink_active_list(unsigned long nr_to_scan,
 	isolate_mode_t isolate_mode = 0;
 	int file = is_file_lru(lru);
 	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
+#ifdef CONFIG_MI_RMAP_EFFICIENCY
+	bool protect_highmap = mi_rmap_may_protect(sc, false);
+#endif
 
 	lru_add_drain();
 
@@ -2257,6 +2260,20 @@ static void shrink_active_list(unsigned long nr_to_scan,
 			}
 		}
 
+#ifdef CONFIG_MI_RMAP_EFFICIENCY
+		/* KEEP on the active list means another trip around that list. */
+		if (protect_highmap &&
+		    mi_rmap_check(page, sc->nr_scanned, sc->priority,
+				  &sc->nr_mi_rmap_protected) != MI_RMAP_RECLAIM) {
+			nr_rotated += hpage_nr_pages(page);
+			list_add(&page->lru, &l_active);
+			continue;
+		}
+
+		/* Budget exhaustion may bypass rmap only to deactivate the page. */
+		if (protect_highmap && mi_rmap_should_bypass(page, sc->priority))
+			goto deactivate;
+#endif
 		if (page_referenced(page, 0, sc->target_mem_cgroup,
 				    &vm_flags)) {
 			nr_rotated += hpage_nr_pages(page);
@@ -2275,6 +2292,9 @@ static void shrink_active_list(unsigned long nr_to_scan,
 			}
 		}
 
+#ifdef CONFIG_MI_RMAP_EFFICIENCY
+deactivate:
+#endif
 		ClearPageActive(page);	/* we are de-activating */
 		SetPageWorkingset(page);
 		list_add(&page->lru, &l_inactive);

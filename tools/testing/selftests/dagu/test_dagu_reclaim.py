@@ -42,11 +42,25 @@ struct page { int mapcount; bool compound, swapbacked, anon, mapped; };
 #define page_mapcount(p) ((p)->mapcount)
 enum mi_rmap_control { MI_RMAP_RECLAIM, MI_RMAP_KEEP, MI_RMAP_ACTIVATE };
 static unsigned int mi_mapcount_thres = 20;
-static bool mi_rmap_enabled;
+MI_RMAP_ENABLED_DECL
 struct scan_control { bool global; int order; gfp_t gfp_mask; };
 static long available;
 static long si_mem_available(void) { return available; }
 static bool global_reclaim(struct scan_control *sc) { return sc->global; }
+'''
+policy_prefix = policy_prefix.replace('MI_RMAP_ENABLED_DECL', re.search(
+    r'^static bool mi_rmap_enabled[^;]*;', read_source('mm/mi_rmap_efficiency.c'),
+    re.MULTILINE)[0].replace('__read_mostly', ''))
+policy_prefix += r'''
+#define __init
+#define ENOMEM 12
+struct kobject { int unused; };
+static struct kobject object;
+static struct kobject *kernel_kobj = &object;
+static int mi_rmap_attr_group;
+static struct kobject *kobject_create_and_add(const char *name, struct kobject *parent) { return &object; }
+static int sysfs_create_group(struct kobject *obj, int *group) { return 0; }
+static void kobject_put(struct kobject *obj) { }
 '''
 policy_tests = r'''
 int main(void) {
@@ -54,6 +68,8 @@ int main(void) {
     struct scan_control sc = {.global = true};
     unsigned long count = 0;
     assert(mi_rmap_check(&p, 64, 12, &count) == MI_RMAP_RECLAIM);
+    assert(!mi_rmap_efficiency_init());
+    assert(mi_rmap_check(&p, 64, 12, &count) == MI_RMAP_RECLAIM && count == 0);
     mi_rmap_enabled = true;
     assert(mi_rmap_check(&p, 64, 12, &count) == MI_RMAP_ACTIVATE && count == 1);
     p.mapcount = 19;
@@ -70,7 +86,20 @@ int main(void) {
     assert(mi_rmap_check(&p, 16, 9, &count) == MI_RMAP_RECLAIM);
     assert(mi_rmap_check(&p, 32, 9, &count) == MI_RMAP_ACTIVATE && count == 2);
     assert(mi_rmap_check(&p, 32, 9, &count) == MI_RMAP_RECLAIM);
+    /* Protection is exhausted; bypass permits deactivation, never retention. */
+    assert(mi_rmap_should_bypass(&p, 9));
+    assert(count == 2);
+    mi_rmap_enabled = false;
+    assert(!mi_rmap_should_bypass(&p, 9));
+    mi_rmap_enabled = true;
+    assert(!mi_rmap_should_bypass(&p, 6));
+    assert(!mi_rmap_should_bypass(&p, 10));
+    p.mapcount = 9;
+    assert(!mi_rmap_should_bypass(&p, 9));
+    p.mapcount = 10;
+    assert(mi_rmap_should_bypass(&p, 9));
     p.compound = true;
+    assert(!mi_rmap_should_bypass(&p, 9));
     assert(mi_rmap_check(&p, 64, 12, &count) == MI_RMAP_RECLAIM);
     p.compound = false; p.anon = true;
     assert(mi_rmap_check(&p, 64, 12, &count) == MI_RMAP_RECLAIM);
@@ -346,6 +375,8 @@ programs = {
     'policy': common + policy_prefix +
         function('mm/mi_rmap_efficiency.c', 'mi_keep_threshold') +
         function('mm/mi_rmap_efficiency.c', 'mi_rmap_check') +
+        function('mm/mi_rmap_efficiency.c', 'mi_rmap_should_bypass') +
+        function('mm/mi_rmap_efficiency.c', 'mi_rmap_efficiency_init') +
         function('mm/vmscan.c', 'mi_rmap_may_protect') + policy_tests,
     'control': common + submit_prefix + control_prefix + control_functions +
         function('mm/kshrink_slabd.c', 'wakeup_kshrink_slabd') + control_tests,
