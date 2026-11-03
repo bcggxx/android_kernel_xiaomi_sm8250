@@ -976,3 +976,15 @@ config READAHEAD_LIMIT
 	  Ordinary buffered reads and mmap retain their demand range.
 	  Runtime disabled by default; this is an experimental policy.
 	  See Documentation/vm/readahead-limit.rst for controls and limits.
+
+config MI_ASYNC_RECLAIM
+	bool "File-rmap contention reclaim worker (experimental)"
+	depends on ARM64 && MMU && SYSFS && !MEMORY_HOTPLUG
+	default n
+	help
+	  Allow normal global kswapd inactive-file reclaim to defer base pages
+	  on file rmap lock contention. A bounded worker retries with normal
+	  reference checks. Direct, forced and compound reclaim are unchanged.
+	  Runtime disabled by default; disabling cancels pending pages and
+	  waits for the running page. Requires memory-pressure device testing.
+	  See Documentation/vm/mi-async-reclaim.rst.
