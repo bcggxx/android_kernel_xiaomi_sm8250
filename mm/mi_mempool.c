@@ -153,7 +153,7 @@ static unsigned long pool_count(struct shrinker *s, struct shrink_control *sc)
 			if (sc->nid == NUMA_NO_NODE || page_to_nid(page) == sc->nid)
 				nr++;
 	spin_unlock_irqrestore(&pool_lock, flags);
-	return nr;
+	return nr ? nr : SHRINK_EMPTY;
 }
 
 static unsigned long pool_scan(struct shrinker *s, struct shrink_control *sc)
@@ -181,7 +181,8 @@ static unsigned long pool_scan(struct shrinker *s, struct shrink_control *sc)
 		__free_pages(page, 0);
 	}
 	sc->nr_scanned = nr;
-	return nr;
+	/* A stale count snapshot must not leave reclaim with zero progress. */
+	return nr ? nr : SHRINK_STOP;
 }
 
 static struct shrinker pool_shrinker = {
