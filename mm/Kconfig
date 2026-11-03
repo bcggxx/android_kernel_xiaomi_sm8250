@@ -988,3 +988,12 @@ config MI_ASYNC_RECLAIM
 	  Runtime disabled by default; disabling cancels pending pages and
 	  waits for the running page. Requires memory-pressure device testing.
 	  See Documentation/vm/mi-async-reclaim.rst.
+
+config MI_MEMPOOL
+	bool "Experimental order-zero allocator reserve"
+	depends on ARM64 && ARM64_4K_PAGES && SYSFS && !MEMORY_HOTPLUG
+	default n
+	help
+	  A runtime-disabled 4 MiB NORMAL-zone reserve for eligible failed
+	  order-zero allocations. Pressure releases stored pages. Experimental;
+	  requires target-device memory-pressure and concurrency validation.

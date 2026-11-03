@@ -17,6 +17,7 @@
 #include <linux/stddef.h>
 #include <linux/mm.h>
 #include <linux/swap.h>
+#include <linux/mi_mempool.h>
 #include <linux/interrupt.h>
 #include <linux/pagemap.h>
 #include <linux/jiffies.h>
@@ -3090,6 +3091,7 @@ void free_unref_page(struct page *page)
 	local_irq_save(flags);
 	free_unref_page_commit(page, pfn);
 	local_irq_restore(flags);
+	mi_mempool_free_event();
 }
 
 /*
@@ -4953,6 +4955,18 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order, int preferred_nid,
 		ac.nodemask = nodemask;
 
 	page = __alloc_pages_slowpath(alloc_mask, order, &ac);
+	if (!page && ac.preferred_zoneref &&
+	    ac.preferred_zoneref->zone &&
+	    zone_idx(ac.preferred_zoneref->zone) <= ac.high_zoneidx &&
+	    (!ac.nodemask || node_isset(zone_to_nid(ac.preferred_zoneref->zone),
+				      *ac.nodemask)) &&
+	    cpuset_zone_allowed(ac.preferred_zoneref->zone, alloc_mask)) {
+		page = mi_mempool_borrow(alloc_mask, order,
+					ac.preferred_zoneref->zone);
+		/* Already prepared: repeat only caller initialization. */
+		if (page && want_init_on_alloc(alloc_mask))
+			kernel_init_free_pages(page, 1);
+	}
 
 out:
 	if (memcg_kmem_enabled() && (gfp_mask & __GFP_ACCOUNT) && page &&
