@@ -40,3 +40,11 @@ helpers. Literal contract examples, empty/overflow/async/marker and strict
 input bounds are host arithmetic/interface checks only. Kernel CSS/RCU,
 concurrency, IO and real policy decisions require a new experimental kernel;
 see Documentation/vm/readahead-limit.rst.
+
+`test_dagu_reclaim.py` also exercises the extracted slab submission and
+registered enable setter: default synchronous fallback, invalid input,
+pending/running drain waits, interrupted disable with admission left closed,
+and a producer paused before the admission lock while disable completes.
+Its worker completion, wait queues, freezer interruption and CSS references
+are userspace substitutes; real memcg/freezer/reclaim validation remains
+necessary on the target kernel.

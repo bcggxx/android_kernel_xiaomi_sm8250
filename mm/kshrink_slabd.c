@@ -28,12 +28,52 @@ struct slabd_request {
 
 static DEFINE_SPINLOCK(slabd_lock);
 static DECLARE_WAIT_QUEUE_HEAD(slabd_wait);
+static DECLARE_WAIT_QUEUE_HEAD(slabd_idle);
 static struct task_struct *slabd_task;
 static struct slabd_request slabd_request;
 static bool slabd_pending;
 static bool slabd_busy;
-static bool slabd_enabled __read_mostly = true;
-module_param_named(enabled, slabd_enabled, bool, 0644);
+static bool slabd_enabled __read_mostly;
+
+static bool slabd_is_idle(void)
+{
+	unsigned long flags;
+	bool idle;
+
+	spin_lock_irqsave(&slabd_lock, flags);
+	idle = !slabd_pending && !slabd_busy;
+	spin_unlock_irqrestore(&slabd_lock, flags);
+	return idle;
+}
+
+static int slabd_set_enabled(const char *val, const struct kernel_param *kp)
+{
+	bool enabled;
+	struct kernel_param parsed = { .arg = &enabled };
+	unsigned long flags;
+	int ret;
+
+	ret = param_set_bool(val, &parsed);
+	if (ret)
+		return ret;
+
+	/* Parameter writes serialize here via the module parameter mutex. */
+	spin_lock_irqsave(&slabd_lock, flags);
+	WRITE_ONCE(slabd_enabled, enabled);
+	spin_unlock_irqrestore(&slabd_lock, flags);
+
+	/* The worker never takes the parameter mutex, including during reclaim. */
+	if (!enabled)
+		return wait_event_freezable(slabd_idle, slabd_is_idle());
+	return 0;
+}
+
+static const struct kernel_param_ops slabd_enabled_ops = {
+	.flags = KERNEL_PARAM_OPS_FL_NOARG,
+	.set = slabd_set_enabled,
+	.get = param_get_bool,
+};
+module_param_cb(enabled, &slabd_enabled_ops, &slabd_enabled, 0644);
 MODULE_PARM_DESC(enabled, "Allow background slab reclaim requests");
 
 bool wakeup_kshrink_slabd(gfp_t gfp_mask, int nid,
@@ -42,12 +82,11 @@ bool wakeup_kshrink_slabd(gfp_t gfp_mask, int nid,
 	unsigned long flags;
 
 	/* Severe pressure must make progress in the reclaiming task itself. */
-	if (!READ_ONCE(slabd_enabled) || !current_is_kswapd() ||
-	    priority < DEF_PRIORITY - 2)
+	if (!current_is_kswapd() || priority < DEF_PRIORITY - 2)
 		return false;
 
 	spin_lock_irqsave(&slabd_lock, flags);
-	if (!slabd_task || slabd_pending || slabd_busy)
+	if (!slabd_enabled || !slabd_task || slabd_pending || slabd_busy)
 		goto synchronous;
 	if (memcg && !css_tryget_online(&memcg->css))
 		goto synchronous;
@@ -86,7 +125,7 @@ static int kshrink_slabd(void *unused)
 		spin_lock_irqsave(&slabd_lock, flags);
 		request = slabd_request;
 		WRITE_ONCE(slabd_pending, false);
-		slabd_busy = true;
+		WRITE_ONCE(slabd_busy, true);
 		spin_unlock_irqrestore(&slabd_lock, flags);
 
 		reclaim_state.reclaimed_slab = 0;
@@ -95,18 +134,24 @@ static int kshrink_slabd(void *unused)
 		mem_cgroup_put(request.memcg);
 
 		spin_lock_irqsave(&slabd_lock, flags);
-		slabd_busy = false;
+		WRITE_ONCE(slabd_busy, false);
 		spin_unlock_irqrestore(&slabd_lock, flags);
+		wake_up_all(&slabd_idle);
 		cond_resched();
 	}
 
 	/* No normal stop path exists for this built-in, but keep refs balanced. */
 	spin_lock_irqsave(&slabd_lock, flags);
 	slabd_task = NULL;
+	WRITE_ONCE(slabd_busy, true);
 	request.memcg = slabd_pending ? slabd_request.memcg : NULL;
 	WRITE_ONCE(slabd_pending, false);
 	spin_unlock_irqrestore(&slabd_lock, flags);
 	mem_cgroup_put(request.memcg);
+	spin_lock_irqsave(&slabd_lock, flags);
+	WRITE_ONCE(slabd_busy, false);
+	spin_unlock_irqrestore(&slabd_lock, flags);
+	wake_up_all(&slabd_idle);
 	current->reclaim_state = NULL;
 	return 0;
 }

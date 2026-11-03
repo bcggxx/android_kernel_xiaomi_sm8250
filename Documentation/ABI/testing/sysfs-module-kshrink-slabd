@@ -1,7 +1,14 @@
 What:		/sys/module/kshrink_slabd/parameters/enabled
 Date:		October 2026
 Description:	Runtime boolean switch for CONFIG_KSHRINK_SLABD, when built
-		in. Disabling prevents new asynchronous requests; one pending
-		or running request may finish. Direct reclaim, drop_caches,
-		severe pressure and a busy worker remain synchronous. The
-		option is off in the default configuration.
+		in; defaults to false. Disabling rejects new asynchronous
+		requests under the request lock and waits for pending/running
+		work and its memcg reference release. A successful write of
+		false guarantees idle background reclaim on return. The wait
+		is freezable and may be interrupted by a signal: on error,
+		admission stays disabled but drain is not guaranteed; write
+		false again to retry. Invalid input does not change state.
+		Freezing can defer completion until thaw; no bounded latency
+		is promised. Direct reclaim, drop_caches, severe pressure and
+		a busy/unavailable worker remain synchronous. The Kconfig
+		option is also off in the default configuration.

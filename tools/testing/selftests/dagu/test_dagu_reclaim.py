@@ -5,11 +5,12 @@ This covers policy decisions and concurrent request ownership, not kernel
 reclaim progress, kthread execution, CSS teardown, freezer or boot behavior.
 """
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
 
-from c_helpers import function
+from c_helpers import function, read_source
 
 common = r'''
 #include <assert.h>
@@ -19,6 +20,7 @@ common = r'''
 #include <stdio.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <sched.h>
 #define DEF_PRIORITY 12
 #define READ_ONCE(x) __atomic_load_n(&(x), __ATOMIC_RELAXED)
 #define WRITE_ONCE(x, v) __atomic_store_n(&(x), (v), __ATOMIC_RELAXED)
@@ -107,16 +109,25 @@ static struct task_struct worker;
 static struct task_struct *slabd_task;
 static struct slabd_request slabd_request;
 static bool slabd_pending, slabd_busy;
-static bool slabd_enabled = true;
+SLABD_ENABLED_DECL
 static int slabd_wait;
 static atomic_int wake_count, winners;
 static struct mem_cgroup memcg;
 static pthread_barrier_t barrier;
 static _Thread_local int caller_kswapd;
 static _Thread_local struct task_struct caller;
+static _Thread_local bool gate_submit;
+static atomic_bool submit_at_lock, release_submit;
+static void test_lock(pthread_mutex_t *lock) {
+    if (gate_submit) {
+        atomic_store(&submit_at_lock, true);
+        while (!atomic_load(&release_submit)) sched_yield();
+    }
+    assert(!pthread_mutex_lock(lock));
+}
 #define current (&caller)
 #define current_is_kswapd() (caller_kswapd)
-#define spin_lock_irqsave(lock, flags) do { (flags) = 0; assert(!pthread_mutex_lock(lock)); } while (0)
+#define spin_lock_irqsave(lock, flags) do { (flags) = 0; test_lock(lock); } while (0)
 #define spin_unlock_irqrestore(lock, flags) do { (void)(flags); assert(!pthread_mutex_unlock(lock)); } while (0)
 static bool css_tryget_online(struct cgroup_subsys_state *css) {
     if (!atomic_load(&css->online)) return false;
@@ -176,11 +187,168 @@ int main(void) {
     puts("PASS: concurrent slab submissions, memcg ownership, busy/pressure/direct fallbacks");
 }
 '''
+slabd_source = read_source('mm/kshrink_slabd.c')
+# Use the actual initial state and registered setter, including the legacy
+# module_param_named path, so the pre-fix source fails on behavior.
+enabled_decl = re.search(r'^static bool slabd_enabled[^;]*;', slabd_source,
+                         re.MULTILINE)[0].replace('__read_mostly', '')
+submit_prefix = submit_prefix.replace('SLABD_ENABLED_DECL', enabled_decl)
+control_functions = ''
+if 'module_param_cb(enabled,' in slabd_source:
+    control_functions = function('mm/kshrink_slabd.c', 'slabd_is_idle') + \
+        function('mm/kshrink_slabd.c', 'slabd_set_enabled')
+    control_functions += re.search(
+        r'static const struct kernel_param_ops slabd_enabled_ops = \{.*?\};',
+        slabd_source, re.DOTALL)[0] + '\n'
+    registered_setter = 'slabd_enabled_ops.set'
+else:
+    assert 'module_param_named(enabled, slabd_enabled, bool, 0644)' in slabd_source
+    registered_setter = 'param_set_bool'
+
+control_prefix = r'''
+#include <errno.h>
+#include <string.h>
+#include <sched.h>
+struct kernel_param { void *arg; };
+#define KERNEL_PARAM_OPS_FL_NOARG 1
+struct kernel_param_ops {
+    unsigned int flags;
+    int (*set)(const char *, const struct kernel_param *);
+    int (*get)(char *, const struct kernel_param *);
+};
+static int param_get_bool(char *buffer, const struct kernel_param *kp) {
+    (void)buffer; (void)kp; return 0;
+}
+static pthread_mutex_t parameter_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t wait_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t wait_cond = PTHREAD_COND_INITIALIZER;
+static atomic_bool drain_waiting, disable_done;
+static bool interrupt_drain;
+static int slabd_idle;
+static int param_set_bool(const char *val, const struct kernel_param *kp) {
+    bool parsed;
+    if (!val || !strcmp(val, "1")) parsed = true;
+    else if (!strcmp(val, "0")) parsed = false;
+    else return -EINVAL;
+    *(bool *)kp->arg = parsed;
+    return 0;
+}
+#undef wake_up
+#define wake_up(queue) do { \
+    (void)(queue); \
+    assert(!pthread_mutex_lock(&wait_lock)); \
+    assert(!pthread_cond_broadcast(&wait_cond)); \
+    assert(!pthread_mutex_unlock(&wait_lock)); \
+} while (0)
+#define wait_event(queue, condition) do { \
+    (void)(queue); \
+    assert(!pthread_mutex_lock(&wait_lock)); \
+    atomic_store(&drain_waiting, true); \
+    while (!(condition)) assert(!pthread_cond_wait(&wait_cond, &wait_lock)); \
+    assert(!pthread_mutex_unlock(&wait_lock)); \
+} while (0)
+#define wait_event_freezable(queue, condition) ({ \
+    int ret = -EINTR; \
+    if (!interrupt_drain) { wait_event(queue, condition); ret = 0; } \
+    ret; \
+})
+'''
+control_tests = r'''
+static int set_enabled(const char *value) {
+    struct kernel_param kp = { .arg = &slabd_enabled };
+    assert(!pthread_mutex_lock(&parameter_lock));
+    int ret = REGISTERED_SETTER(value, &kp);
+    assert(!pthread_mutex_unlock(&parameter_lock));
+    return ret;
+}
+static void *disable(void *unused) {
+    assert(!set_enabled("0"));
+    atomic_store(&disable_done, true);
+    return NULL;
+}
+static void *delayed_submit(void *unused) {
+    caller_kswapd = 1;
+    gate_submit = true;
+    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12));
+    return NULL;
+}
+static void finish_request(void) {
+    unsigned long flags;
+    spin_lock_irqsave(&slabd_lock, flags);
+    assert(slabd_pending || slabd_busy);
+    /* Model the worker's reclaim completion and CSS put before going idle. */
+    atomic_fetch_sub(&memcg.css.refs, 1);
+    WRITE_ONCE(slabd_pending, false);
+    WRITE_ONCE(slabd_busy, false);
+    spin_unlock_irqrestore(&slabd_lock, flags);
+    wake_up(&slabd_idle);
+}
+int main(void) {
+    pthread_t closer;
+    caller_kswapd = 1;
+    slabd_task = &worker;
+    atomic_init(&memcg.css.refs, 1);
+    atomic_init(&memcg.css.online, true);
+    /* Default admission, exercised through the real submission entry. */
+    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12));
+    assert(!set_enabled("0"));
+    assert(!set_enabled(NULL));
+    assert(wakeup_kshrink_slabd(7, 0, &memcg, 12));
+    finish_request();
+    assert(!set_enabled("0"));
+    for (int running = 0; running < 2; running++) {
+        assert(!set_enabled("1"));
+        assert(set_enabled("invalid") == -EINVAL);
+        assert(wakeup_kshrink_slabd(7, 0, &memcg, 12));
+        assert(atomic_load(&memcg.css.refs) == 2);
+        if (running) { slabd_pending = false; slabd_busy = true; }
+        atomic_store(&drain_waiting, false);
+        atomic_store(&disable_done, false);
+        assert(!pthread_create(&closer, NULL, disable, NULL));
+        /* The drain wait stub is a scheduling handshake, not a sleep race. */
+        while (!atomic_load(&drain_waiting) && !atomic_load(&disable_done))
+            sched_yield();
+        assert(!atomic_load(&disable_done));
+        assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12));
+        finish_request();
+        assert(!pthread_join(closer, NULL));
+        assert(atomic_load(&disable_done));
+        assert(atomic_load(&memcg.css.refs) == 1);
+        assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12));
+        assert(set_enabled("invalid") == -EINVAL);
+        assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12));
+        assert(!set_enabled("0"));
+    }
+    assert(!set_enabled("1"));
+    assert(wakeup_kshrink_slabd(7, 0, &memcg, 12));
+    interrupt_drain = true;
+    assert(set_enabled("0") == -EINTR);
+    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12));
+    assert(atomic_load(&memcg.css.refs) == 2);
+    interrupt_drain = false;
+    finish_request();
+    assert(!set_enabled("0"));
+    assert(atomic_load(&memcg.css.refs) == 1);
+    /* Pause a producer before the shared lock, then finish disable first. */
+    assert(!set_enabled("1"));
+    assert(!pthread_create(&closer, NULL, delayed_submit, NULL));
+    while (!atomic_load(&submit_at_lock)) sched_yield();
+    assert(!set_enabled("0"));
+    atomic_store(&release_submit, true);
+    assert(!pthread_join(closer, NULL));
+    assert(atomic_load(&memcg.css.refs) == 1);
+    puts("PASS: default sync, invalid control, pending/running drain, close/submit race");
+}
+'''
+control_tests = control_tests.replace('REGISTERED_SETTER', registered_setter)
+
 programs = {
     'policy': common + policy_prefix +
         function('mm/mi_rmap_efficiency.c', 'mi_keep_threshold') +
         function('mm/mi_rmap_efficiency.c', 'mi_rmap_check') +
         function('mm/vmscan.c', 'mi_rmap_may_protect') + policy_tests,
+    'control': common + submit_prefix + control_prefix + control_functions +
+        function('mm/kshrink_slabd.c', 'wakeup_kshrink_slabd') + control_tests,
     'submit': common + submit_prefix +
         function('mm/kshrink_slabd.c', 'wakeup_kshrink_slabd') + submit_tests,
 }
