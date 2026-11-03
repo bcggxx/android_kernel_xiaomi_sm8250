@@ -43,6 +43,7 @@ descriptions of data structures and algorithms.
    page_migration
    page_frags
    page_owner
+   readahead-page-granularity
    remap_file_pages
    slub
    split_page_table_lock
