@@ -15,6 +15,12 @@
 
 #include "../../android/binder_internal.h"
 
+/* Extra official comm rules are opt-in, independently of the legacy list. */
+static bool extra_main_threads;
+module_param(extra_main_threads, bool, 0644);
+MODULE_PARM_DESC(extra_main_threads,
+		"Allow rsonalassistant and .globallauncher main-thread transactions");
+
 static bool binder_prio_is_rt(unsigned int policy)
 {
 	return policy == SCHED_FIFO || policy == SCHED_RR;
@@ -44,7 +50,9 @@ static bool binder_prio_is_graphics_sender(struct task_struct *sender,
 		return false;
 
 	return !strcmp(name, "com.miui.home") ||
-		!strcmp(name, "ndroid.systemui") || !strcmp(name, "surfaceflinger");
+		!strcmp(name, "ndroid.systemui") || !strcmp(name, "surfaceflinger") ||
+		(READ_ONCE(extra_main_threads) &&
+		 (!strcmp(name, "rsonalassistant") || !strcmp(name, ".globallauncher")));
 }
 
 static bool binder_prio_is_graphics_transaction(struct binder_transaction *t,

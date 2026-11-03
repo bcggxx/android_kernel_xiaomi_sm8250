@@ -5,11 +5,12 @@ Task/RCU/scheduler substitutes verify decisions and ref balance; this is not
 an IPC, priority-restoration or kernel lockdep stress test.
 """
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
 
-from c_helpers import function
+from c_helpers import function, read_source
 
 preamble = r'''
 #include <assert.h>
@@ -75,7 +76,11 @@ static void name_task(struct task_struct *task, const char *name, int pid, int t
     task->normal_prio = 120;
 }
 '''
-body = '\n'.join(function('drivers/staging/binder_prio/binder_prio.c', name) for name in [
+# Include the real parameter declaration so its default is exercised too.
+parameter = re.search(r'^static bool extra_main_threads[^;]*;',
+                      read_source('drivers/staging/binder_prio/binder_prio.c'),
+                      re.MULTILINE).group(0)
+body = parameter + '\n' + '\n'.join(function('drivers/staging/binder_prio/binder_prio.c', name) for name in [
     'binder_prio_is_rt', 'binder_prio_is_graphics_sender',
     'binder_prio_is_graphics_transaction', 'binder_prio_receiver_allows_rt',
     'binder_prio_set_priority'])
@@ -145,8 +150,60 @@ int main(void) {
     sf.policy = SCHED_NORMAL; sf.normal_prio = 120; t.flags = TF_ONE_WAY;
     binder_prio_set_priority(NULL, &t, &sf);
     assert(calls == 2 && sf.policy == SCHED_NORMAL && render.refs == 1);
+    /* Official extra names use the same transaction consumer and safety gates. */
+    t.flags = 0;
+    const char *extra_names[] = {"rsonalassistant", ".globallauncher"};
+    for (unsigned int i = 0; i < 2; i++) {
+        name_task(&other, extra_names[i], 40, 40, NULL);
+        other.policy = SCHED_RR;
+        from.task = &other;
+        sf.policy = SCHED_NORMAL; sf.normal_prio = 120;
+        sf.cap_nice = false; sf.rt_limit = 1;
+        int before = calls;
+        assert(!extra_main_threads);
+        binder_prio_set_priority(NULL, &t, &sf);
+        assert(calls == before);
+        extra_main_threads = true;
+        binder_prio_set_priority(NULL, &t, &sf);
+        assert(calls == before + 1 && sf.normal_prio == 98);
+        assert(last_policy == (SCHED_FIFO | SCHED_RESET_ON_FORK));
+        binder_prio_set_priority(NULL, &t, &sf);
+        assert(calls == before + 1); /* Equal RT is preserved. */
+        sf.policy = SCHED_RR; sf.normal_prio = 80;
+        binder_prio_set_priority(NULL, &t, &sf);
+        assert(calls == before + 1 && sf.normal_prio == 80);
+        sf.policy = SCHED_NORMAL; sf.normal_prio = 120;
+        sf.rt_limit = 0;
+        binder_prio_set_priority(NULL, &t, &sf);
+        assert(calls == before + 1);
+        sf.rt_limit = 1; node.inherit_rt = false;
+        binder_prio_set_priority(NULL, &t, &sf);
+        assert(calls == before + 1);
+        node.inherit_rt = true; t.flags = TF_ONE_WAY;
+        binder_prio_set_priority(NULL, &t, &sf);
+        assert(calls == before + 1);
+        t.flags = 0; t.from = NULL;
+        binder_prio_set_priority(NULL, &t, &sf);
+        assert(calls == before + 1);
+        t.from = &from; other.pid = 41;
+        binder_prio_set_priority(NULL, &t, &sf);
+        assert(calls == before + 1);
+        other.pid = 40; other.policy = SCHED_NORMAL;
+        binder_prio_set_priority(NULL, &t, &sf);
+        assert(calls == before + 1);
+        other.policy = SCHED_FIFO;
+        strcat(other.comm, "X");
+        binder_prio_set_priority(NULL, &t, &sf);
+        assert(calls == before + 1);
+        snprintf(other.comm, TASK_COMM_LEN, "%s", extra_names[i]);
+        extra_main_threads = false;
+        binder_prio_set_priority(NULL, &t, &sf);
+        assert(calls == before + 1 && other.refs == 1 && t.saved_priority == 120);
+        assert(binder_prio_is_graphics_sender(&home, &sf));
+        assert(binder_prio_is_graphics_sender(&camera, &sf));
+    }
     pthread_mutex_destroy(&t.lock);
-    puts("PASS: node allow/deny, missing buffer/node, graphics classification, oneway bypass, RT limits, stronger priority, refs");
+    puts("PASS: default-off official exact main threads and shared safety gates, node allow/deny, missing buffer/node, graphics classification, oneway bypass, RT limits, stronger priority, refs");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='binder-graphics-') as temp:

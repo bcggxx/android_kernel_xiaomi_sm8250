@@ -57,3 +57,10 @@ Binder core node-minimum selection, nested transactions or reply/error recovery.
 A node denying inheritance suppresses this extension's boost; Binder core may
 still select an RT minimum configured on that node. Real IPC and recovery
 remain separate device validation requirements.
+
+The graphics check also exercises the opt-in official main-thread comm rules:
+default-off, enabling/disabling subsequent requests, exact versus similar names,
+main versus secondary threads, FIFO/RR versus normal senders, oneway/node/sender
+gates and receiver permissions/equal or stronger RT protection. The parameter's
+actual declaration supplies its default; the host check does not test the kernel
+module-parameter sysfs parser or real in-flight disable/unload semantics.
