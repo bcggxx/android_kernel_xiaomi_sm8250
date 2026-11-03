@@ -36,7 +36,10 @@ struct task_struct {
     struct task_struct *group_leader;
 };
 struct binder_thread { struct task_struct *task; };
+struct binder_node { bool inherit_rt; };
+struct binder_buffer { struct binder_node *target_node; };
 struct binder_transaction {
+    struct binder_buffer *buffer;
     unsigned int flags;
     struct binder_thread *from;
     pthread_mutex_t lock;
@@ -80,7 +83,9 @@ tests = r'''
 int main(void) {
     struct task_struct home, render, sf, ui, other, camera, blur;
     struct binder_thread from;
-    struct binder_transaction t = {.lock = PTHREAD_MUTEX_INITIALIZER, .saved_priority = 120};
+    struct binder_node node = {.inherit_rt = true};
+    struct binder_buffer buffer = {.target_node = &node};
+    struct binder_transaction t = {.buffer = &buffer, .lock = PTHREAD_MUTEX_INITIALIZER, .saved_priority = 120};
     name_task(&home, "com.miui.home", 10, 10, NULL);
     name_task(&render, "RenderThread", 11, 10, &home);
     name_task(&sf, "surfaceflinger", 20, 20, NULL);
@@ -115,6 +120,16 @@ int main(void) {
     binder_prio_set_priority(NULL, &t, &sf);
     assert(calls == 0 && sf.policy == SCHED_NORMAL);
     sf.rt_limit = 1;
+    node.inherit_rt = false;
+    binder_prio_set_priority(NULL, &t, &sf);
+    assert(calls == 0 && sf.policy == SCHED_NORMAL && render.refs == 1);
+    buffer.target_node = NULL;
+    binder_prio_set_priority(NULL, &t, &sf);
+    assert(calls == 0 && sf.policy == SCHED_NORMAL && render.refs == 1);
+    t.buffer = NULL;
+    binder_prio_set_priority(NULL, &t, &sf);
+    assert(calls == 0 && sf.policy == SCHED_NORMAL && render.refs == 1);
+    t.buffer = &buffer; buffer.target_node = &node; node.inherit_rt = true;
     binder_prio_set_priority(NULL, &t, &sf);
     assert(calls == 1 && last_rt == 1 && (last_policy & SCHED_RESET_ON_FORK));
     assert(sf.normal_prio == 98 && t.saved_priority == 120);
@@ -131,7 +146,7 @@ int main(void) {
     binder_prio_set_priority(NULL, &t, &sf);
     assert(calls == 2 && sf.policy == SCHED_NORMAL && render.refs == 1);
     pthread_mutex_destroy(&t.lock);
-    puts("PASS: graphics classification, one-way/reply bypass, RT limits, stronger priority, refs");
+    puts("PASS: node allow/deny, missing buffer/node, graphics classification, oneway bypass, RT limits, stronger priority, refs");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='binder-graphics-') as temp:
