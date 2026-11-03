@@ -120,3 +120,6 @@ obj-$(CONFIG_READAHEAD_LIMIT) += readahead_limit.o
 obj-$(CONFIG_MI_ASYNC_RECLAIM) += mi_async_reclaim.o
 obj-y += allocator_reserve.o
 obj-$(CONFIG_MI_MEMPOOL) += mi_mempool.o
+
+
+obj-$(CONFIG_MI_FAULT_AROUND) += mi_fault_around.o

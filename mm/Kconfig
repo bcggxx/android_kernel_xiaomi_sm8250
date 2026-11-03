@@ -997,3 +997,13 @@ config MI_MEMPOOL
 	  A runtime-disabled 4 MiB NORMAL-zone reserve for eligible failed
 	  order-zero allocations. Pressure releases stored pages. Experimental;
 	  requires target-device memory-pressure and concurrency validation.
+
+config MI_FAULT_AROUND
+	bool "UID fault-around selection (experimental)"
+	depends on ARM64 && MMU && SYSFS
+	default n
+	help
+	  Allow a root-controlled UID remainder bitmap to skip speculative
+	  file fault-around mappings. Demand faults are unchanged. Runtime
+	  disabled by default; independent of readahead window policies.
+	  See Documentation/vm/mi-fault-around.rst.
