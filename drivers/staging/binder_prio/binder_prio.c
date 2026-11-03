@@ -53,7 +53,9 @@ static bool binder_prio_is_graphics_transaction(struct binder_transaction *t,
 	struct task_struct *sender = NULL;
 	bool graphics = false;
 
-	if (!t || !receiver || (t->flags & TF_ONE_WAY))
+	if (!t || !receiver || (t->flags & TF_ONE_WAY) ||
+	    !t->buffer || !t->buffer->target_node ||
+	    !t->buffer->target_node->inherit_rt)
 		return false;
 
 	/* t->from can disappear concurrently with sender thread teardown. */

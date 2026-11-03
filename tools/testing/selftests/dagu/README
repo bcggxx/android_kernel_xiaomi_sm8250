@@ -1,5 +1,5 @@
 Dagu host regression tests
-==========================
+===================
 
 These tests compile functions extracted from the kernel sources against small
 userspace substitutes. They need Python 3, a native C compiler with sanitizer
@@ -48,3 +48,12 @@ and a producer paused before the admission lock while disable completes.
 Its worker completion, wait queues, freezer interruption and CSS references
 are userspace substitutes; real memcg/freezer/reclaim validation remains
 necessary on the target kernel.
+
+`test_graphics_priority.py` extracts the restricted Binder graphics policy and
+checks node inherit_rt allow/deny and absent buffer/node inputs, sender task
+reference balance, receiver RT permission and stronger-priority preservation.
+Its scheduler substitute observes boost requests only. It does not execute
+Binder core node-minimum selection, nested transactions or reply/error recovery.
+A node denying inheritance suppresses this extension's boost; Binder core may
+still select an RT minimum configured on that node. Real IPC and recovery
+remain separate device validation requirements.
