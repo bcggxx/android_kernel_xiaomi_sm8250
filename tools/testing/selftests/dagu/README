@@ -1,5 +1,5 @@
 Dagu host regression tests
-===================
+============
 
 These tests compile functions extracted from the kernel sources against small
 userspace substitutes. They need Python 3, a native C compiler with sanitizer
@@ -64,3 +64,8 @@ main versus secondary threads, FIFO/RR versus normal senders, oneway/node/sender
 gates and receiver permissions/equal or stronger RT protection. The parameter's
 actual declaration supplies its default; the host check does not test the kernel
 module-parameter sysfs parser or real in-flight disable/unload semantics.
+
+mi_async_reclaim: test_mi_async_reclaim.py is a finite host admission and
+ownership regression using actual C functions with stubs. It does not verify
+real rmap contention, LRU accounting, worker execution or freezer/stop behavior.
+See Documentation/vm/mi-async-reclaim.rst for the required real memory seam.

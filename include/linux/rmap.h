@@ -214,6 +214,12 @@ static inline void page_dup_rmap(struct page *page, bool compound)
 int page_referenced(struct page *, int is_locked,
 			struct mem_cgroup *memcg, unsigned long *vm_flags);
 
+int page_referenced_trylock(struct page *page, int is_locked,
+		struct mem_cgroup *memcg, unsigned long *vm_flags,
+		bool *file_contended);
+bool try_to_unmap_trylock(struct page *page, enum ttu_flags flags,
+		struct vm_area_struct *vma, bool *file_contended);
+
 bool try_to_unmap(struct page *page, enum ttu_flags flags,
 				struct vm_area_struct *vma);
 
@@ -281,6 +287,8 @@ int page_mapped_in_vma(struct page *page, struct vm_area_struct *vma);
  * invalid_vma: for skipping uninterested vma
  */
 struct rmap_walk_control {
+	/* Optional file-only trylock request/result; stack lifetime of walk. */
+	bool *file_contended;
 	void *arg;
 	struct vm_area_struct *target_vma;
 	/*
@@ -312,6 +320,13 @@ static inline int page_referenced(struct page *page, int is_locked,
 }
 
 #define try_to_unmap(page, refs, vma) false
+#define try_to_unmap_trylock(page, refs, vma, contended) false
+static inline int page_referenced_trylock(struct page *page, int is_locked,
+		struct mem_cgroup *memcg, unsigned long *vm_flags,
+		bool *file_contended)
+{
+	return page_referenced(page, is_locked, memcg, vm_flags);
+}
 
 static inline int page_mkclean(struct page *page)
 {

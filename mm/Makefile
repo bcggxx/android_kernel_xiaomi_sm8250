@@ -116,3 +116,5 @@ obj-$(CONFIG_KSHRINK_SLABD) += kshrink_slabd.o
 obj-$(CONFIG_MI_RMAP_EFFICIENCY) += mi_rmap_efficiency.o
 
 obj-$(CONFIG_READAHEAD_LIMIT) += readahead_limit.o
+
+obj-$(CONFIG_MI_ASYNC_RECLAIM) += mi_async_reclaim.o
