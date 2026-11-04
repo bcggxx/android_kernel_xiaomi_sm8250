@@ -880,10 +880,11 @@ int dlp_replay_profile(const char *root, const struct dlp_metadata *metadata,
 			uint64_t offset = range->offset;
 			uint64_t remaining = range->length;
 
-			if (result->ranges_attempted++ >= 1024) {
+			if (result->ranges_attempted >= 1024) {
 				result->range_limit = 1;
 				break;
 			}
+			result->ranges_attempted++;
 			while (remaining) {
 				struct timespec now;
 				uint64_t elapsed;
