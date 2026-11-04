@@ -1,5 +1,5 @@
-Dagu launch profile collection (DLP1)
-====================================
+Dagu launch profile collection and publication
+==============================================
 
 This is an independent, default-off 4.19 implementation motivated by the
 iorap2 binary collector/compiler/export evidence. It does not implement or
@@ -40,7 +40,7 @@ no bare dev/ino identity survives a file reference. Unique-page budget is
 pages). Independent opens can therefore exhaust the raw budget before the
 freeze-time union reaches 32MiB; this is conservative truncation, not silent
 loss presented as complete. Mutable-file/version acceptance belongs to the
-consumer validation/persistence slice; pinning an inode alone proves no
+helper validation and persistence path; pinning an inode alone proves no
 content immutability.
 Preallocation plus maximum wire image is below 4MiB. Slot exhaustion preserves
 a prefix, sets TRUNCATED and saturating dropped-event count. A truncated
@@ -72,11 +72,29 @@ ENOSPC; user-copy failure EFAULT before mutation. Original file export fds
 are ordinary readonly files: disable does not revoke reads already authorized
 through those fds. The trusted helper closes them on cancellation.
 
-The tools/dagu_launch_profile consumer and AOSP integration are part of this
-collection slice. Package-bound persistence and launch replay remain ticket08.
-Host parsing checks and object compilation cannot prove Android integration,
-PTE concurrency, RCU behavior, cold-cache I/O, or performance. No image or
-runtime enablement is implied by building these sources.
+The fixed AOSP15 system_server adapter queries package/user/UID/version/signer
+and application path metadata outside the WM lock. It sends a bounded
+little-endian DLP2 PREPARE/BEGIN/FINISH/ABORT/INVALIDATE/OFF stream to the
+root helper. FINISH re-queries the same metadata and a changed generation
+aborts instead of producing a profile. Package update, removal, data-clear and
+user-removal broadcasts invalidate the corresponding stored profile.
+
+The helper consumes only the immutable snapshot plus independently reopened
+readonly file fds. It requires the resolved path to match trusted package
+metadata, reopens every component with ``O_NOFOLLOW``, compares file identity
+and ownership, hashes APK/native content, and records a mount ID. Page-rounded
+snapshot tails are clipped to the real file size. Profiles are CRC-checked,
+little endian, per-user/package, atomically renamed, and bounded to 1 MiB per
+profile and 16 MiB/64 packages in total. A different boot, release or version,
+corrupt schema, truncated snapshot or metadata-generation mismatch cannot
+replace the previous valid profile.
+
+This is default-off publication only. Real ``PENDING_ATTACH`` launch replay,
+bounded pread, in-flight cancellation and the replay off acknowledgement remain
+ticket 08b. Host parsing checks and object compilation cannot prove Android
+integration, SELinux enforcement, PTE concurrency, RCU behavior, filesystem
+atomicity, cold-cache I/O or performance. No image or runtime enablement is
+implied by building these sources.
 
 FINISH revalidates the lease and task after detaching collection and waiting
 for readers. An expired or exited session is dropped with ESRCH even if the

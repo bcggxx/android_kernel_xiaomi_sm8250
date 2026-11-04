@@ -4,6 +4,7 @@ type dagu_launch_profile_exec, exec_type, file_type, system_file_type;
 init_daemon_domain(dagu_launch_profile)
 type dagu_launch_profile_socket, file_type;
 type dagu_launch_profile_device, dev_type;
+type dagu_launch_profile_data, file_type, data_file_type;
 system_internal_prop(dagu_launch_profile_enabled_prop)
 set_prop(system_server, dagu_launch_profile_enabled_prop)
 userdebug_or_eng(`set_prop(shell, dagu_launch_profile_enabled_prop)')
@@ -25,3 +26,12 @@ allow dagu_launch_profile appdomain:fd use;
 allow dagu_launch_profile { apk_data_file dalvikcache_data_file system_file vendor_file }:file { open read getattr };
 # Snapshot anonymous file metadata/read path is owned by this helper domain.
 allow dagu_launch_profile self:file { read getattr };
+type_transition dagu_launch_profile dagu_launch_profile_data:{ dir file } dagu_launch_profile_data;
+allow dagu_launch_profile dagu_launch_profile_data:dir {
+    create getattr open search read add_name remove_name write
+};
+allow dagu_launch_profile dagu_launch_profile_data:file {
+    create getattr open read write rename unlink
+};
+allow dagu_launch_profile proc_mounts:file r_file_perms;
+allow dagu_launch_profile proc_self:lnk_file read;

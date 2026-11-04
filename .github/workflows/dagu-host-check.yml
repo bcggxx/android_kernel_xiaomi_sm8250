@@ -25,6 +25,7 @@ on:
       - tools/testing/selftests/dagu/**
       - tools/testing/selftests/Makefile
       - tools/testing/selftests/lib.mk
+      - tools/dagu_launch_profile/**
       - .github/workflows/dagu-host-check.yml
 permissions:
   contents: read
@@ -42,3 +43,12 @@ jobs:
           make -C tools/testing/selftests TARGETS=dagu run_tests | tee dagu-tests.log
           # This kernel's legacy TAP runner does not propagate test failures.
           ! grep -Eq '^not ok .*\[FAIL\]' dagu-tests.log
+      - name: Check DLP2 profile publication
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Werror -O1 -pthread \
+            -Itools/dagu_launch_profile -Itools/dagu_launch_profile/include \
+            tools/dagu_launch_profile/tests/profile_publish_test.c \
+            tools/dagu_launch_profile/dlp_profile_store.c \
+            tools/dagu_launch_profile/dlp_sha256.c \
+            -o /tmp/dlp-profile-publish-test
+          /tmp/dlp-profile-publish-test
