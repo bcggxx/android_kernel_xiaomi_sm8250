@@ -1,71 +1,88 @@
-# Dagu launch profile: ticket07 collection slice
+# Dagu launch profile: trusted collection and publication
 
-Independent clean implementation for SM8250/dagu, Linux4.19 and fixed
-AOSP `android-15.0.0_r1`. Both `CONFIG_DAGU_LAUNCH_PROFILE` and the runtime
-`sys.dagu_launch_profile.enabled` property default off. This is the new DLP1
-protocol; it does not implement the unknown Xiaomi iorap2 daemon ABI.
+Independent default-off implementation for SM8250/dagu, Linux 4.19 and fixed
+AOSP `android-15.0.0_r1`. `CONFIG_DAGU_LAUNCH_PROFILE` and
+`sys.dagu_launch_profile.enabled` both default off. The kernel control ABI
+remains DLP1; system_server and the root helper use bounded DLP2 packets. This
+does not claim compatibility with the unknown Xiaomi iorap2 daemon.
 
-The combined `../mi_mem_engine/aosp/frameworks-base.patch` and apply script
-install both independent adapters. C03 does not consult C06's enable property.
-Build `dagu_launch_profile_helper`, add its init rc, merge this directory's
-policy into platform-private policy and label `/dev/dagu_launch_profile`.
-`include/linux/dagu_launch_profile.h` is the exported kernel UAPI copy;
-keep it identical when changing the ABI. Actual platform JNI/Soong/SELinux
-integration and HyperOS adaptation still require a platform build.
+## Collection and metadata
 
-ActivityMetricsLogger allocates a monotonic cookie with LaunchingState at
-notifyActivityLaunching. Resolved package/user and exact ActivityRecord token
-are bound at notifyActivityLaunched. Without a thread this remains pending.
-ActivityTaskSupervisor.realStartActivityLocked passes the same r/proc pair
-immediately after r.setProcess(proc), including verified cold attach from
-AMS; no delayed numeric PID or package lookup finds the owner. If attach has
-already happened, association captures r.app directly. The worker rechecks
-the exact WPC/thread under the WM lock, then exports a duplicate of the existing
-Binder driver file plus a strongly held ApplicationThread handle. The kernel
-resolves the actual Binder owner and compares tid/uid. The initial attach
-claim depends on the fixed AOSP AMS startSeq/UID validation; it is not a claim
-about an unmodified proprietary ROM.
+ActivityMetricsLogger creates a monotonic cookie at
+`notifyActivityLaunching`. ActivityTaskSupervisor passes the exact
+ActivityRecord/WindowProcessController pair after verified attachment. The
+worker rechecks that identity under the WM lock, obtains a duplicate Binder
+driver fd and strongly held ApplicationThread handle, and sends PREPARE,
+BEGIN, FINISH or ABORT with the connection epoch and cookie.
 
-Session CAS prevents done/abort-before-attach from resurrecting a cookie.
-Death registration is consumed exactly once using the existing fixed C06
-helper. One worker orders BEGIN/FINISH/ABORT. A socket failure revokes the
-controller and advances the Java connection generation, preventing queued
-old-generation pending launches from restarting on reconnect. Each helper
-connection uses a new boottime epoch. New launches abort the previous active
-collector. Coalescing to a different ActivityRecord conservatively aborts
-that C03 cookie rather than reassigning its identity. A 1000ms collection
-lease is below the kernel's 2000ms hard limit. A timed-out collector yields
-an error and reconnect, never publishes an incomplete successful profile.
+Package metadata is queried outside the WM lock with
+`getPackageInfoAsUser(package, GET_SIGNING_CERTIFICATES, userId)`. The wire
+contains the package, user/UID, long version code, all current APK signer
+SHA-256 digests in sorted order, and deduplicated base/split APK, native,
+shared-file and resource-root paths. The metadata generation is a deterministic
+SHA-256-derived scalar over that canonical set. FINISH queries and transmits
+the full metadata again; a changed generation aborts rather than freezing the
+launch.
 
-On successful metrics done the actual helper FINISHes, receives the immutable
-snapshot fd, exports independently reopened read-only file fds, fstats them, and decodes
-every LE range with size/index/order/overflow/page-alignment and 32MiB bounds.
-Page-rounded tail bytes are bounded by rounded EOF.
-Files whose original description is writable are not exported; their metadata
-ranges are consumed and explicitly counted as skipped. All fds close on every
-success/error path. The summary records flags, dropped and skipped counts;
-truncation is visible. No disk training profile is published by ticket07,
-including truncated snapshots. Ticket08 supplies package identity validation,
-atomic persistence, invalidation and bounded actual pread replay.
+Package update/removal/data-clear and user-removal broadcasts queue
+INVALIDATE operations. PREPARE/BEGIN/FINISH/ABORT/INVALIDATE/OFF use a fixed
+little-endian header and fixed ACK. A decoder rejects unknown flags, reserved
+bytes, unsorted/duplicate paths, invalid lengths, generation mismatch, extra
+descriptors and packets above 65535 bytes.
 
-Coverage explicitly starts after verified ApplicationThread attachment.
-Pre-attach zygote/loader accesses are not collected. Coalesced launches and
-writable original file descriptions have the additional exclusions above.
-This is not full-process tracing or proof of donor equivalence.
+FINISH freezes the kernel snapshot and immediately opens its sole immutable
+snapshot fd before the ACCEPT ACK. Digest and disk work runs on one helper
+worker, so the Java control worker does not hold a Binder reference through
+file hashing. The snapshot retains the existing collector budget until the
+worker closes it.
 
-A single host production-function seam check is available (Linux container):
+## Trusted file and profile publication
+
+For every EXPORT_FILE fd, the helper checks read-only mode, resolves
+`/proc/self/fd`, and requires an exact trusted APK/shared path or a descendant
+of an advertised native/resource root. It then reopens each component with
+`openat(O_NOFOLLOW)` and compares regular-file identity, size, mode, owner,
+ctime and mtime. App-writable files, deleted/memfd/proc/sys/dev paths,
+unadvertised paths, writable descriptions and identity races are skipped and
+flagged.
+
+APKs and native-library files receive a SHA-256 content digest. Shared
+system/vendor/resource files retain mount/file identity but are not bulk-hashed.
+The profile records a mount ID resolved from `/proc/self/mountinfo`, so inode
+reuse alone is not a valid identity. Page-aligned snapshot ranges are clipped
+to the real file EOF before storage; virtual rounded tail bytes are never
+persisted.
+
+Profiles live under `/data/misc/dagu_launch_profile/<user>/<package>/`.
+`profile.bin` uses a CRC-checked little-endian schema with package metadata,
+per-file identity/digest and byte ranges. Publication writes a unique tmp
+file with `O_NOFOLLOW`, fsyncs it, atomically renames it and fsyncs the package
+directory. Failure preserves the previous valid profile or leaves no profile.
+Limits are 1 MiB per profile, 16 MiB and 64 packages in total, with oldest
+profile eviction. Startup removes stale tmp files, rejects profiles from a
+different boot/release/version, and verifies schema/CRC/ranges.
+
+This ticket publishes profiles only. It does not select a profile at a real
+`PENDING_ATTACH` event, perform bounded pread, cancel in-flight replay, or claim
+the 08b/off ACK or parent C03 closure. Pre-attach zygote/loader coverage,
+THP/filemap coverage, writable donor data differences, actual AOSP apply/build,
+SELinux enforcement, target RCU/PTE/FS behavior, device launch, physical I/O and
+performance remain unverified.
+
+## Host check
 
 ```
-cc -std=gnu11 -Wall -Wextra -Werror -Itools/dagu_launch_profile/include \
-  tools/dagu_launch_profile/tests/snapshot_consumer.c -o /tmp/dlp-snapshot-consumer
-/tmp/dlp-snapshot-consumer
+cc -std=gnu11 -Wall -Wextra -Werror -pthread \
+  -Itools/dagu_launch_profile -Itools/dagu_launch_profile/include \
+  tools/dagu_launch_profile/tests/profile_publish_test.c \
+  tools/dagu_launch_profile/dlp_profile_store.c \
+  tools/dagu_launch_profile/dlp_sha256.c -o /tmp/dlp-profile-publish-test
+/tmp/dlp-profile-publish-test
 ```
 
-The harness compiles the real helper and calls its actual snapshot consumer;
-it accepts a page-rounded two-page short-read result for a 5000-byte file and
-rejects an aligned u64 length that would wrap budget subtraction. It does not
-prove Android Java compilation, real launch/attach, Binder owner resolution,
-PTE/RCU concurrency, device IO or performance. After the green run, static
-review added the rounded-EOF guard and expected-WPC check; final source was
-not recompiled or rerun under the one-check budget. No device, CI, full kernel or
-AOSP build was run for this slice.
+The check drives the production DLP2 parser and snapshot-to-profile publisher.
+It covers metadata-generation mismatch, page-range EOF trimming, real APK
+digest, profile readback validation, atomic non-replacement for
+truncated/mismatched attempts and package invalidation. It does not prove
+Android Java/JNI/Soong/SELinux, HyperOS integration, kernel RCU/PTE/FS
+concurrency, device launch or IO.
