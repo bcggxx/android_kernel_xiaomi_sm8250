@@ -47,3 +47,11 @@ config MILLET_HS
 	help
 	  Mi frozen function
 
+config MI_UNION_POWER
+	tristate "union power frame load monitor"
+	depends on MIHW
+	default n
+	help
+	  Bounded frame queue/vsync monitor. The ioctl path is disabled until
+	  FRAME_MONITOR_ENABLE is explicitly set to 1.
+
