@@ -19,6 +19,7 @@
 #include <linux/swap.h>
 #include <linux/mi_mempool.h>
 #include <linux/mi_reclaim_pool.h>
+#include <linux/mi_mem_engine.h>
 #include <linux/interrupt.h>
 #include <linux/pagemap.h>
 #include <linux/jiffies.h>
@@ -3725,6 +3726,9 @@ retry:
 		     (alloc_flags & (ALLOC_HARDER | ALLOC_HIGH)))) {
 			mark = zone->_watermark[WMARK_MIN];
 		}
+		mark = mme_allocation_mark(mark, gfp_mask, order,
+			alloc_flags & (ALLOC_NO_WATERMARKS | ALLOC_HIGH |
+				       ALLOC_HARDER | ALLOC_OOM));
 		if (!zone_watermark_fast(zone, order, mark,
 				       ac_classzone_idx(ac), alloc_flags)) {
 			int ret;

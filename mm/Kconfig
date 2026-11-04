@@ -1026,3 +1026,13 @@ config MI_RECLAIM_POOL
 	  Allows eligible effective-RT slowpath allocations to borrow before
 	  direct reclaim. Exclusive with MI_MEMPOOL through allocator owner.
 	  Does not capture freed pages or implement donor QoS policy.
+
+config MI_MEM_ENGINE
+	bool "Bounded launch-scene allocation watermark adaptation"
+	depends on MMU && TRACEPOINTS && ANDROID_BINDER_IPC
+	default n
+	help
+	  C06 conservative scene-1 allocation watermark adaptation. Disabled
+	  until a privileged exclusive controller explicitly enables it. Only
+	  ordinary sleepable order-0 requests of Binder-node-bound tasks qualify.
+	  Requires a trusted ROM producer; this does not add a ROM integration.

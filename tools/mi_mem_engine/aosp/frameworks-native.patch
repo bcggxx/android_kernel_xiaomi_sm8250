@@ -1,0 +1,26 @@
+--- a/libs/binder/include/binder/ProcessState.h
++++ b/libs/binder/include/binder/ProcessState.h
+@@ -92,6 +92,10 @@
+     LIBBINDER_EXPORTED void giveThreadPoolName();
+ 
+     LIBBINDER_EXPORTED String8 getDriverName();
++
++    // Privileged framework integration: duplicate the existing Binder file.
++    // Opening the driver again would create a different handle namespace.
++    LIBBINDER_EXPORTED int dupDriverFD() const;
+ 
+     LIBBINDER_EXPORTED ssize_t getKernelReferences(size_t count, uintptr_t* buf);
+ 
+--- a/libs/binder/ProcessState.cpp
++++ b/libs/binder/ProcessState.cpp
+@@ -512,6 +512,10 @@
+     androidSetThreadName(makeBinderThreadName().c_str());
+ }
+ 
++int ProcessState::dupDriverFD() const {
++    return fcntl(mDriverFD, F_DUPFD_CLOEXEC, 0);
++}
++
+ String8 ProcessState::getDriverName() {
+     return mDriverName;
+ }

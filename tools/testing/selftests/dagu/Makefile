@@ -2,6 +2,7 @@
 TEST_PROGS := test_miui_tracking_parser.py test_seq_file_ra.py \
 	test_dagu_reclaim.py test_global_slab.py test_mi_async_reclaim.py test_mi_mtmr.py test_graphics_priority.py test_zsmalloc_pool.py test_limited_readahead.py test_mi_fault_around.py test_mi_reclaim_pool.py
 TEST_FILES := c_helpers.py README
+TEST_GEN_PROGS := mem_engine/session
 TEST_GEN_FILES := kernel-sources.tar
 
 include ../lib.mk

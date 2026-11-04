@@ -1,0 +1,87 @@
+--- a/services/core/java/com/android/server/wm/ActivityMetricsLogger.java
++++ b/services/core/java/com/android/server/wm/ActivityMetricsLogger.java
+@@ -181,6 +181,7 @@
+     private long mLastLogTimeSecs;
+     private final ActivityTaskSupervisor mSupervisor;
+     private final MetricsLogger mMetricsLogger = new MetricsLogger();
++    private MiMemEngineLaunch mMiMemEngine;
+     private final Handler mLoggerHandler = FgThread.getHandler();
+ 
+     /** All active transitions. */
+@@ -284,6 +285,7 @@
+ 
+     /** The information created when an activity is confirmed to be launched. */
+     private static final class TransitionInfo {
++        MiMemEngineLaunch.Session mMiMemEngineSession;
+         /**
+          * The field to lookup and update an existing transition efficiently between
+          * {@link #notifyActivityLaunching} and {@link #notifyActivityLaunched}.
+@@ -733,7 +735,13 @@
+ 
+             mLastTransitionInfo.remove(info.mLastLaunchedActivity);
+             // Coalesce multiple (trampoline) activities from a single sequence together.
++            if (mMiMemEngine != null) mMiMemEngine.end(info.mMiMemEngineSession);
++            info.mMiMemEngineSession = null;
+             info.setLatestLaunchedActivity(launchedActivity);
++            if (processRunning && android.os.SystemProperties.getBoolean("sys.mi_mem_engine.enabled", false)) {
++                if (mMiMemEngine == null) mMiMemEngine = new MiMemEngineLaunch(mSupervisor);
++                info.mMiMemEngineSession = mMiMemEngine.begin(processRecord);
++            }
+             // Update the latest one so it can be found when reporting fully-drawn.
+             mLastTransitionInfo.put(launchedActivity, info);
+ 
+@@ -760,6 +768,10 @@
+         if (DEBUG_METRICS) Slog.i(TAG, "notifyActivityLaunched successful");
+         // A new launch sequence has begun. Start tracking it.
+         mTransitionInfoList.add(newInfo);
++        if (processRunning && android.os.SystemProperties.getBoolean("sys.mi_mem_engine.enabled", false)) {
++            if (mMiMemEngine == null) mMiMemEngine = new MiMemEngineLaunch(mSupervisor);
++            newInfo.mMiMemEngineSession = mMiMemEngine.begin(processRecord);
++        }
+         mLastTransitionInfo.put(launchedActivity, newInfo);
+         startLaunchTrace(newInfo);
+         if (newInfo.isInterestingToLoggerAndObserver()) {
+@@ -1031,6 +1043,7 @@
+                 if (info.mProcessRunning) {
+                     // It was HOT/WARM launch, but the process was died somehow right after the
+                     // launch request.
++                    if (mMiMemEngine != null) mMiMemEngine.end(info.mMiMemEngineSession);
+                     info.mProcessRunning = false;
+                     info.mTransitionType = TYPE_TRANSITION_COLD_LAUNCH;
+                     final String msg = "Process " + info.mLastLaunchedActivity.info.processName
+@@ -1067,6 +1080,7 @@
+             Slog.i(TAG, "done abort=" + abort + " cause=" + cause + " timestamp=" + timestampNs
+                     + " info=" + info);
+         }
++        if (mMiMemEngine != null) mMiMemEngine.end(info.mMiMemEngineSession);
+         info.mLaunchingState.stopTrace(abort, info);
+         stopLaunchTrace(info);
+         final Boolean isHibernating =
+--- a/services/core/jni/onload.cpp
++++ b/services/core/jni/onload.cpp
+@@ -24,6 +24,7 @@
+ #include "BroadcastRadio/Tuner.h"
+ 
+ namespace android {
++int register_android_server_wm_MiMemEngineLaunch(JNIEnv* env);
+ int register_android_server_BatteryStatsService(JNIEnv* env);
+ int register_android_server_ConsumerIrService(JNIEnv *env);
+ int register_android_server_InputManager(JNIEnv* env);
+@@ -108,6 +109,7 @@
+     register_android_server_connectivity_Vpn(env);
+     register_android_server_devicepolicy_CryptoTestHelper(env);
+     register_android_server_ConsumerIrService(env);
++    if (register_android_server_wm_MiMemEngineLaunch(env) < 0) return JNI_ERR;
+     register_android_server_BatteryStatsService(env);
+     register_android_server_tv_TvUinputBridge(env);
+     register_android_server_tv_TvInputHal(env);
+--- a/services/core/jni/Android.bp
++++ b/services/core/jni/Android.bp
+@@ -23,6 +23,7 @@
+     ],
+ 
+     srcs: [
++        "com_android_server_wm_MiMemEngineLaunch.cpp",
+         "BroadcastRadio/JavaRef.cpp",
+         "BroadcastRadio/NativeCallbackThread.cpp",
+         "BroadcastRadio/BroadcastRadioService.cpp",

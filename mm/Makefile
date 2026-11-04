@@ -126,3 +126,5 @@ obj-$(CONFIG_MI_FAULT_AROUND) += mi_fault_around.o
 obj-$(CONFIG_MI_RECLAIM_POOL) += mi_reclaim_pool.o
 
 obj-$(CONFIG_MI_MTMR) += mi_mtmr.o
+
+obj-$(CONFIG_MI_MEM_ENGINE) += mi_mem_engine.o
