@@ -39,15 +39,31 @@ typedef unsigned int gfp_t;
 struct zone { int index; };
 struct task { int prio; unsigned int flags; } task, worker;
 static struct task *current = &task, *refill_task = &worker;
-struct list_head { bool linked; };
+struct list_head { struct list_head *next, *prev; };
 struct page { struct list_head lru; struct zone *zone; } item;
-static struct list_head reserve_pages;
+static struct list_head reserve_pages, raw_pages;
 static int pool_lock, misc;
-static unsigned int count;
-static unsigned long hits, misses;
+static unsigned int count, raw_count;
+static unsigned long hits, misses, raw_borrowed;
 static bool enabled, unsafe;
-#define list_for_each_entry(p,h,m) for ((void)(h),p=&item; p && p->lru.linked; p=NULL)
-#define list_del_init(p) ((p)->linked=false)
+static void init_list_head(struct list_head *head)
+{ head->next = head; head->prev = head; }
+static void list_add_tail(struct list_head *node, struct list_head *head)
+{
+	node->prev = head->prev;
+	node->next = head;
+	head->prev->next = node;
+	head->prev = node;
+}
+#define list_for_each_entry(p,h,m) \
+	for (p=(struct page *)((char *)(h)->next - offsetof(struct page,m)); \
+	     &p->m != (h); \
+	     p=(struct page *)((char *)p->m.next - offsetof(struct page,m)))
+#define list_del_init(node) do { \
+	(node)->prev->next=(node)->next; \
+	(node)->next->prev=(node)->prev; \
+	init_list_head(node); \
+} while (0)
 #define page_zone(p) ((p)->zone)
 #define page_pgdat(p) (p)
 #define zone_idx(z) ((z)->index)
@@ -57,34 +73,42 @@ static bool enabled, unsafe;
 #define in_atomic() unsafe
 static void mi_reclaim_pool_free_event(void) {}
 '''
-for name in ('take_page', 'mi_reclaim_pool_borrow'):
+for name in ('take_page', 'take_raw_page', 'mi_reclaim_pool_borrow'):
     code += function('mm/mi_reclaim_pool.c', name)
 code += r'''
-static void stock(struct zone *z) { item.zone=z;item.lru.linked=true;count=1;misc=1;enabled=true;task.flags=0;unsafe=false; }
+static void stock(struct zone *z)
+{
+	init_list_head(&reserve_pages);
+	init_list_head(&raw_pages);
+	count=1;raw_count=0;misc=1;enabled=true;task.flags=0;unsafe=false;
+	item.zone=z; list_add_tail(&item.lru,&reserve_pages);
+}
 int main(void) {
- struct zone normal={2}, other={2}, dma={0};
+ struct zone normal={2}, dma={0};
+ struct page *page;
+ bool needs_prep;
  assert(!allocator_reserve_acquire(RESERVE_C21));
  assert(allocator_reserve_acquire(RESERVE_C22)==-EBUSY);
  allocator_reserve_release(RESERVE_C21);
  assert(!allocator_reserve_acquire(RESERVE_C22));
  assert(allocator_reserve_acquire(RESERVE_C21)==-EBUSY);
  allocator_reserve_release(RESERVE_C22);
- stock(&normal);task.prio=120; assert(!mi_reclaim_pool_borrow(1,0,&normal));
- task.prio=-1;assert(!mi_reclaim_pool_borrow(1,0,&normal));
- task.prio=100;assert(!mi_reclaim_pool_borrow(1,0,&normal));
- task.prio=99;assert(!mi_reclaim_pool_borrow(1,0,&other));assert(count==1 && misc==1);
- assert(!mi_reclaim_pool_borrow(1,0,&dma));
- assert(!mi_reclaim_pool_borrow(1,1,&normal));
- assert(!mi_reclaim_pool_borrow(0,0,&normal));
- for (unsigned int f=2;f<=128;f*=2) assert(!mi_reclaim_pool_borrow(1|f,0,&normal));
- unsafe=true;assert(!mi_reclaim_pool_borrow(1,0,&normal));unsafe=false;
- task.flags=PF_MEMALLOC;assert(!mi_reclaim_pool_borrow(1,0,&normal));task.flags=0;
- current=&worker;worker.prio=1;assert(!mi_reclaim_pool_borrow(1,0,&normal));current=&task;
- enabled=false;assert(!mi_reclaim_pool_borrow(1,0,&normal));enabled=true;
+ stock(&normal);task.prio=120; assert(!mi_reclaim_pool_borrow(1,0,&normal,&needs_prep));
+ task.prio=-1;assert(!mi_reclaim_pool_borrow(1,0,&normal,&needs_prep));
+ task.prio=100;assert(!mi_reclaim_pool_borrow(1,0,&normal,&needs_prep));
+ task.prio=99;assert(!mi_reclaim_pool_borrow(1,0,&dma,&needs_prep));
+ assert(!mi_reclaim_pool_borrow(1,1,&normal,&needs_prep));
+ assert(!mi_reclaim_pool_borrow(0,0,&normal,&needs_prep));
+ for (unsigned int f=2;f<=128;f*=2) assert(!mi_reclaim_pool_borrow(1|f,0,&normal,&needs_prep));
+ unsafe=true;assert(!mi_reclaim_pool_borrow(1,0,&normal,&needs_prep));unsafe=false;
+ task.flags=PF_MEMALLOC;assert(!mi_reclaim_pool_borrow(1,0,&normal,&needs_prep));task.flags=0;
+ current=&worker;worker.prio=1;assert(!mi_reclaim_pool_borrow(1,0,&normal,&needs_prep));current=&task;
+ enabled=false;assert(!mi_reclaim_pool_borrow(1,0,&normal,&needs_prep));enabled=true;
  /* Effective prio is sufficient, including a PI-boosted normal-policy task. */
- task.prio=0;assert(mi_reclaim_pool_borrow(1,0,&normal)==&item);
- assert(count==0 && misc==0 && hits==1 && !item.lru.linked);
- assert(!mi_reclaim_pool_borrow(1,0,&normal));assert(hits==1);
+ task.prio=0;page=mi_reclaim_pool_borrow(1,0,&normal,&needs_prep);
+ assert(page==&item && !needs_prep);
+ assert(count==0 && misc==0 && hits==1 && item.lru.next==&item.lru);
+ assert(!mi_reclaim_pool_borrow(1,0,&normal,&needs_prep));assert(hits==1);
  return 0;
 }
 '''

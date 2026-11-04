@@ -3079,6 +3079,20 @@ static void free_unref_page_commit(struct page *page, unsigned long pfn)
 	}
 }
 
+#ifdef CONFIG_MI_RECLAIM_POOL
+void mi_reclaim_pool_return_raw_page(struct page *page)
+{
+	unsigned long pfn = page_to_pfn(page);
+	int migratetype = get_pfnblock_migratetype(page, pfn);
+
+	/*
+	 * The page already completed free_pages_prepare when captured. Return
+	 * it to buddy without a second free lifecycle or PGFREE event.
+	 */
+	free_one_page(page_zone(page), page, pfn, 0, migratetype);
+}
+#endif
+
 /*
  * Free a 0-order page
  */
@@ -3089,6 +3103,14 @@ void free_unref_page(struct page *page)
 
 	if (!free_unref_page_prepare(page, pfn))
 		return;
+	if (mi_reclaim_pool_raw_capture_enabled() &&
+	    !bulkfree_pcp_prepare(page) &&
+	    mi_reclaim_pool_capture_free_page(page,
+			get_pfnblock_migratetype(page, pfn), false)) {
+		mi_mempool_free_event();
+		mi_reclaim_pool_free_event();
+		return;
+	}
 
 	local_irq_save(flags);
 	free_unref_page_commit(page, pfn);
@@ -3120,12 +3142,18 @@ void free_unref_page_list(struct list_head *list)
 
 		set_page_private(page, 0);
 		trace_mm_page_free_batched(page);
+		if (mi_reclaim_pool_raw_capture_enabled() &&
+		    !bulkfree_pcp_prepare(page) &&
+		    mi_reclaim_pool_capture_free_page(page,
+				get_pfnblock_migratetype(page, pfn), true))
+			goto batch_restore;
 		free_unref_page_commit(page, pfn);
 
 		/*
 		 * Guard against excessive IRQ disabled times when we get
 		 * a large list of pages to free.
 		 */
+batch_restore:
 		if (++batch_count == SWAP_CLUSTER_MAX) {
 			local_irq_restore(flags);
 			batch_count = 0;
@@ -4737,13 +4765,24 @@ retry:
 	    (!ac->nodemask || node_isset(zone_to_nid(ac->preferred_zoneref->zone),
 				       *ac->nodemask)) &&
 	    cpuset_zone_allowed(ac->preferred_zoneref->zone, gfp_mask)) {
+		bool needs_prep = false;
+
 		page = mi_reclaim_pool_borrow(gfp_mask, order,
-					    ac->preferred_zoneref->zone);
+					    ac->preferred_zoneref->zone,
+					    &needs_prep);
 		if (page) {
-			/* Already post_alloc_hook/prep'd once by refill. */
-			if (want_init_on_alloc(gfp_mask))
+			if (needs_prep) {
+				if (unlikely(check_new_page(page)))
+					page = NULL;
+				else
+					prep_new_page(page, 0, gfp_mask,
+						      alloc_flags);
+			} else if (want_init_on_alloc(gfp_mask)) {
+				/* Refill pages were prepared exactly once. */
 				kernel_init_free_pages(page, 1);
-			goto got_pg;
+			}
+			if (page)
+				goto got_pg;
 		}
 	}
 
