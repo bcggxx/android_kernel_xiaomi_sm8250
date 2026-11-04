@@ -1,4 +1,3 @@
-#include <linux/dagu_launch_profile.h>
 /*
  *	linux/mm/filemap.c
  *
@@ -10,6 +9,7 @@
  * most "normal" filesystems (but you don't /have/ to use this:
  * the NFS filesystem used to do this differently, for example)
  */
+#include <linux/dagu_launch_profile.h>
 #include <linux/export.h>
 #include <linux/compiler.h>
 #include <linux/dax.h>

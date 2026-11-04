@@ -106,7 +106,7 @@ void dlp_collect(struct file *file, u64 offset, u64 length)
 			goto full;
 		for (i = 0; i < s->nr_ranges; i++)
 			if (s->ranges[i].file == f && s->ranges[i].first <= first &&
-			s->ranges[i].last >= first)
+			    s->ranges[i].last >= first)
 				break;
 		if (i == s->nr_ranges) {
 			if (i == DLP_RANGES || s->pages == DLP_PAGES)
@@ -184,9 +184,9 @@ static int dlp_freeze(struct dlp_session *s)
 	sort(s->ranges, s->nr_ranges, sizeof(s->ranges[0]), dlp_compare, NULL);
 	for (i = 0; i < s->nr_ranges; i++) {
 		struct dlp_extent *e = &s->ranges[i];
-		if (n && s->ranges[n-1].file == e->file &&
-			s->ranges[n-1].last + 1 >= e->first)
-			s->ranges[n-1].last = max(s->ranges[n-1].last, e->last);
+		if (n && s->ranges[n - 1].file == e->file &&
+		    s->ranges[n - 1].last + 1 >= e->first)
+			s->ranges[n - 1].last = max(s->ranges[n - 1].last, e->last);
 		else
 			s->ranges[n++] = *e;
 	}

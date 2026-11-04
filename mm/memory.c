@@ -1,4 +1,3 @@
-#include <linux/dagu_launch_profile.h>
 /*
  *  linux/mm/memory.c
  *
@@ -39,6 +38,7 @@
  * Aug/Sep 2004 Changed to four level page tables (Andi Kleen)
  */
 
+#include <linux/dagu_launch_profile.h>
 #include <linux/kernel_stat.h>
 #include <linux/mm.h>
 #include <linux/mi_fault_around.h>

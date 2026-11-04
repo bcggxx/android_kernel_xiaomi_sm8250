@@ -38,9 +38,9 @@ lease is below the kernel's 2000ms hard limit. A timed-out collector yields
 an error and reconnect, never publishes an incomplete successful profile.
 
 On successful metrics done the actual helper FINISHes, receives the immutable
-snapshot fd, exports each original read-only file fd, fstats them, and decodes
+snapshot fd, exports independently reopened read-only file fds, fstats them, and decodes
 every LE range with size/index/order/overflow/page-alignment and 32MiB bounds.
-Page-rounded tail bytes beyond EOF are valid when the start is within EOF.
+Page-rounded tail bytes are bounded by rounded EOF.
 Files whose original description is writable are not exported; their metadata
 ranges are consumed and explicitly counted as skipped. All fds close on every
 success/error path. The summary records flags, dropped and skipped counts;

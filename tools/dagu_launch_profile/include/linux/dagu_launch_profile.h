@@ -13,19 +13,19 @@
 #define DLP_EXPORT_FILE 7
 #define DLP_TRUNCATED 1
 struct dlp_request {
- __u32 version, size, op, flags;
- __aligned_u64 epoch, cookie;
- __s32 binder_fd;
- __u32 binder_handle, tid, uid, lease_ms, index;
- __aligned_u64 reserved;
+	__u32 version, size, op, flags;
+	__aligned_u64 epoch, cookie;
+	__s32 binder_fd;
+	__u32 binder_handle, tid, uid, lease_ms, index;
+	__aligned_u64 reserved;
 };
 #define DLP_IOCTL _IOWR('D', 0x70, struct dlp_request)
 /* Snapshot bytes are little endian; offsets and lengths are bytes. */
 struct dlp_snapshot_header {
- __le32 magic, version, size, nr_files, nr_ranges, flags, page_shift, dropped;
+	__le32 magic, version, size, nr_files, nr_ranges, flags, page_shift, dropped;
 };
 struct dlp_snapshot_range {
- __le32 file_index, reserved;
- __le64 offset, length;
+	__le32 file_index, reserved;
+	__le64 offset, length;
 };
 #endif
