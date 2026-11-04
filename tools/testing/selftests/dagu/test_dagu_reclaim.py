@@ -132,7 +132,7 @@ submit_prefix = r'''
 struct cgroup_subsys_state { atomic_int refs; atomic_bool online; };
 struct mem_cgroup { struct cgroup_subsys_state css; };
 struct task_struct { void *reclaim_state; };
-struct slabd_request { struct mem_cgroup *memcg; gfp_t gfp_mask; int nid, priority; };
+struct slabd_request { struct mem_cgroup *memcg; gfp_t gfp_mask; int nid, priority; bool policy; };
 static pthread_mutex_t slabd_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct task_struct worker;
 static struct task_struct *slabd_task;
@@ -224,9 +224,29 @@ slabd_source = read_source('mm/kshrink_slabd.c')
 enabled_decl = re.search(r'^static bool slabd_enabled[^;]*;', slabd_source,
                          re.MULTILINE)[0].replace('__read_mostly', '')
 submit_prefix = submit_prefix.replace('SLABD_ENABLED_DECL', enabled_decl)
+# Shared worker policy state is present even when legacy single-request mode
+# is selected. Keep testing the production admission and disable functions.
+submit_prefix += r'''
+#define min(a,b) ((a)<(b)?(a):(b))
+#define min_t(t,a,b) min((t)(a),(t)(b))
+#define msecs_to_jiffies(x) ((unsigned long)(x))
+#define time_after_eq(a,b) ((long)((a)-(b))>=0)
+#define DEFINE_MUTEX(x) pthread_mutex_t x = PTHREAD_MUTEX_INITIALIZER
+#define mutex_lock(x) ((void)pthread_mutex_lock(x))
+#define mutex_unlock(x) ((void)pthread_mutex_unlock(x))
+static unsigned long jiffies;
+static int slabd_launch_timer;
+static void del_timer_sync(int *timer) { (void)timer; }
+'''
+submit_prefix += 'static DEFINE_MUTEX(slabd_control);' + slabd_source.split(
+    'static DEFINE_MUTEX(slabd_control);', 1)[1].split(
+    'static bool slabd_policy_active', 1)[0]
+submit_prefix += function('mm/kshrink_slabd.c', 'slabd_policy_active')
 control_functions = ''
 if 'module_param_cb(enabled,' in slabd_source:
-    control_functions = function('mm/kshrink_slabd.c', 'slabd_is_idle') + \
+    control_functions = function('mm/kshrink_slabd.c', 'slabd_set_deadline') + \
+        function('mm/kshrink_slabd.c', 'slabd_end_launch') + \
+        function('mm/kshrink_slabd.c', 'slabd_is_idle') + \
         function('mm/kshrink_slabd.c', 'slabd_set_enabled')
     control_functions += re.search(
         r'static const struct kernel_param_ops slabd_enabled_ops = \{.*?\};',
@@ -386,7 +406,10 @@ programs = {
         function('mm/kshrink_slabd.c', 'wakeup_kshrink_slabd') + submit_tests,
 }
 with tempfile.TemporaryDirectory(prefix='dagu-reclaim-') as temp:
+    selected = os.environ.get('DAGU_RECLAIM_CASES', ','.join(programs)).split(',')
     for name, code in programs.items():
+        if name not in selected:
+            continue
         test, binary = Path(temp) / (name + '.c'), Path(temp) / name
         test.write_text(code)
         subprocess.run([os.environ.get('HOSTCC', 'cc'), '-std=gnu11', '-pthread',
