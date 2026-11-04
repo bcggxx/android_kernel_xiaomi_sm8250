@@ -1,3 +1,4 @@
+#include <linux/dagu_launch_profile.h>
 /*
  *  linux/mm/memory.c
  *
@@ -3475,6 +3476,10 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 		page_add_file_rmap(page, false);
 	}
 	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, entry);
+	/* Ordinary file PTE only; existing PTE, COW and THP are excluded. */
+	if (vma->vm_file && !(write && !(vmf->vma_flags & VM_SHARED)))
+		dlp_collect(vma->vm_file, ((u64)vma->vm_pgoff << PAGE_SHIFT) +
+			    (vmf->address - vma->vm_start), PAGE_SIZE);
 
 	/* no need to invalidate: a not-present page won't be cached */
 	update_mmu_cache(vma, vmf->address, vmf->pte);

@@ -1,3 +1,4 @@
+#include <linux/dagu_launch_profile.h>
 /*
  *	linux/mm/filemap.c
  *
@@ -2282,6 +2283,7 @@ page_ok:
 		 */
 
 		ret = copy_page_to_iter(page, offset, nr, iter);
+		dlp_collect(filp, ((u64)index << PAGE_SHIFT) + offset, ret);
 		offset += ret;
 		index += offset >> PAGE_SHIFT;
 		offset &= ~PAGE_MASK;
