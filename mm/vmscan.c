@@ -3049,7 +3049,8 @@ static bool shrink_node(pg_data_t *pgdat, struct scan_control *sc)
 			node_lru_pages += lru_pages;
 
 			if (!wakeup_kshrink_slabd(sc->gfp_mask, pgdat->node_id,
-						 memcg, sc->priority))
+						 memcg, sc->priority,
+						 global_reclaim(sc)))
 				shrink_slab(sc->gfp_mask, pgdat->node_id, memcg,
 					    sc->priority);
 

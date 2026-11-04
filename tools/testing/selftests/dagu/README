@@ -73,3 +73,9 @@ See Documentation/vm/mi-async-reclaim.rst for the required real memory seam.
 The mi_fault_around check extracts the control/decision C functions and uses
 host adapters for kernel APIs. It covers boundaries, collision, error retention,
 readback and switching; it does not validate real mmap/PTEs or concurrency.
+
+The global slab check extracts admission, mode control, pending take and
+serial scan functions. Its iterator and watermarks are substitutes: it checks
+control and reference protocol only, not real memcg offline, shrinkers, RCU,
+freezer or pressure behavior. Real kswapd/multi-memcg/disable validation remains
+required before claiming functional acceptance.

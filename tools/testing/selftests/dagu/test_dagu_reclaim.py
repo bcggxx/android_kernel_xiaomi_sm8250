@@ -137,7 +137,9 @@ static pthread_mutex_t slabd_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct task_struct worker;
 static struct task_struct *slabd_task;
 static struct slabd_request slabd_request;
-static bool slabd_pending, slabd_busy;
+static bool slabd_pending, slabd_busy, slabd_global_scan;
+static struct mem_cgroup *root_mem_cgroup;
+static bool slabd_under_pressure(int nid) { return false; }
 SLABD_ENABLED_DECL
 static int slabd_wait;
 static atomic_int wake_count, winners;
@@ -175,7 +177,7 @@ static void complete_request(void) {
 static void *submit(void *unused) {
     (void)unused; caller_kswapd = 1; caller.reclaim_state = &caller;
     pthread_barrier_wait(&barrier);
-    if (wakeup_kshrink_slabd(7, 0, &memcg, 12)) atomic_fetch_add(&winners, 1);
+    if (wakeup_kshrink_slabd(7, 0, &memcg, 12, true)) atomic_fetch_add(&winners, 1);
     assert(caller.reclaim_state == &caller);
     return NULL;
 }
@@ -184,23 +186,23 @@ int main(void) {
     pthread_t threads[THREADS];
     atomic_init(&memcg.css.refs, 1); atomic_init(&memcg.css.online, true);
     caller_kswapd = 1;
-    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12));
+    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12, true));
     slabd_task = &worker; slabd_enabled = false;
-    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12));
+    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12, true));
     slabd_enabled = true; caller_kswapd = 0;
-    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12));
+    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12, true));
     caller_kswapd = 1;
-    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 9));
+    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 9, true));
     atomic_store(&memcg.css.online, false);
-    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12));
+    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12, true));
     atomic_store(&memcg.css.online, true);
     caller.reclaim_state = &caller;
-    assert(wakeup_kshrink_slabd(7, 0, &memcg, 12));
+    assert(wakeup_kshrink_slabd(7, 0, &memcg, 12, true));
     assert(caller.reclaim_state == &caller);
-    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12));
+    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12, true));
     complete_request();
     slabd_busy = true;
-    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12));
+    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12, true));
     slabd_busy = false;
     assert(!pthread_barrier_init(&barrier, NULL, THREADS));
     for (int round = 0; round < ROUNDS; round++) {
@@ -298,7 +300,7 @@ static void *disable(void *unused) {
 static void *delayed_submit(void *unused) {
     caller_kswapd = 1;
     gate_submit = true;
-    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12));
+    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12, true));
     return NULL;
 }
 static void finish_request(void) {
@@ -319,16 +321,16 @@ int main(void) {
     atomic_init(&memcg.css.refs, 1);
     atomic_init(&memcg.css.online, true);
     /* Default admission, exercised through the real submission entry. */
-    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12));
+    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12, true));
     assert(!set_enabled("0"));
     assert(!set_enabled(NULL));
-    assert(wakeup_kshrink_slabd(7, 0, &memcg, 12));
+    assert(wakeup_kshrink_slabd(7, 0, &memcg, 12, true));
     finish_request();
     assert(!set_enabled("0"));
     for (int running = 0; running < 2; running++) {
         assert(!set_enabled("1"));
         assert(set_enabled("invalid") == -EINVAL);
-        assert(wakeup_kshrink_slabd(7, 0, &memcg, 12));
+        assert(wakeup_kshrink_slabd(7, 0, &memcg, 12, true));
         assert(atomic_load(&memcg.css.refs) == 2);
         if (running) { slabd_pending = false; slabd_busy = true; }
         atomic_store(&drain_waiting, false);
@@ -338,21 +340,21 @@ int main(void) {
         while (!atomic_load(&drain_waiting) && !atomic_load(&disable_done))
             sched_yield();
         assert(!atomic_load(&disable_done));
-        assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12));
+        assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12, true));
         finish_request();
         assert(!pthread_join(closer, NULL));
         assert(atomic_load(&disable_done));
         assert(atomic_load(&memcg.css.refs) == 1);
-        assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12));
+        assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12, true));
         assert(set_enabled("invalid") == -EINVAL);
-        assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12));
+        assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12, true));
         assert(!set_enabled("0"));
     }
     assert(!set_enabled("1"));
-    assert(wakeup_kshrink_slabd(7, 0, &memcg, 12));
+    assert(wakeup_kshrink_slabd(7, 0, &memcg, 12, true));
     interrupt_drain = true;
     assert(set_enabled("0") == -EINTR);
-    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12));
+    assert(!wakeup_kshrink_slabd(7, 0, &memcg, 12, true));
     assert(atomic_load(&memcg.css.refs) == 2);
     interrupt_drain = false;
     finish_request();
