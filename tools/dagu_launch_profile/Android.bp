@@ -1,0 +1,8 @@
+cc_binary {
+    name: "dagu_launch_profile_helper",
+    srcs: ["dagu_launch_profile_helper.c"],
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+    local_include_dirs: ["include"],
+    init_rc: ["dagu_launch_profile.rc"],
+    shared_libs: ["libcutils"],
+}

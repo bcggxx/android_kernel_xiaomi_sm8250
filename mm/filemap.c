@@ -9,6 +9,7 @@
  * most "normal" filesystems (but you don't /have/ to use this:
  * the NFS filesystem used to do this differently, for example)
  */
+#include <linux/dagu_launch_profile.h>
 #include <linux/export.h>
 #include <linux/compiler.h>
 #include <linux/dax.h>
@@ -2282,6 +2283,7 @@ page_ok:
 		 */
 
 		ret = copy_page_to_iter(page, offset, nr, iter);
+		dlp_collect(filp, ((u64)index << PAGE_SHIFT) + offset, ret);
 		offset += ret;
 		index += offset >> PAGE_SHIFT;
 		offset &= ~PAGE_MASK;

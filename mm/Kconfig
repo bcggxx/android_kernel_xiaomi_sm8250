@@ -1040,3 +1040,10 @@ config MI_MEM_ENGINE
 	  until a privileged exclusive controller explicitly enables it. Only
 	  ordinary sleepable order-0 requests of Binder-node-bound tasks qualify.
 	  Requires a trusted ROM producer; this does not add a ROM integration.
+
+config DAGU_LAUNCH_PROFILE
+	bool "Dagu bounded launch file profile collector"
+	depends on ANDROID_BINDER_IPC
+	default n
+	help
+	  Independent root-only DLP1 collector. Runtime disabled by default.
