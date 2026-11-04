@@ -70,6 +70,7 @@
 
 #include <trace/events/tlb.h>
 
+#include "mi_mtmr.h"
 #include "internal.h"
 
 static struct kmem_cache *anon_vma_cachep;
@@ -1218,6 +1219,8 @@ void page_add_file_rmap(struct page *page, bool compound)
 	__mod_lruvec_page_state(page, NR_FILE_MAPPED, nr);
 out:
 	unlock_page_memcg(page);
+	if (!compound)
+		mi_mtmr_remap(page);
 }
 
 static void page_remove_file_rmap(struct page *page, bool compound)
@@ -1260,6 +1263,8 @@ static void page_remove_file_rmap(struct page *page, bool compound)
 		clear_page_mlock(page);
 out:
 	unlock_page_memcg(page);
+	if (!compound && !page_mapped(page))
+		mi_mtmr_nomap(page);
 }
 
 static void page_remove_anon_compound_rmap(struct page *page)

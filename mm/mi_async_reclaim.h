@@ -9,8 +9,6 @@ struct pglist_data;
 #ifdef CONFIG_MI_ASYNC_RECLAIM
 bool mi_async_reclaim_ready(void);
 bool mi_async_reclaim_queue(struct page *page);
-unsigned long mi_async_reclaim_page(struct list_head *pages,
-				  struct pglist_data *pgdat);
 #else
 static inline bool mi_async_reclaim_ready(void) { return false; }
 static inline bool mi_async_reclaim_queue(struct page *page) { return false; }

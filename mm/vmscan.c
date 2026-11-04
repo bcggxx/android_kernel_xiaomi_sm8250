@@ -60,6 +60,7 @@
 #include "internal.h"
 #include "mi_rmap_efficiency.h"
 #include "mi_async_reclaim.h"
+#include "mi_mtmr.h"
 #include <linux/sizes.h>
 
 #ifdef CONFIG_RTMM
@@ -1427,6 +1428,9 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		if (page_mapped(page)) {
 			enum ttu_flags flags = ttu_flags | TTU_BATCH_FLUSH;
 
+			/* A file page may have been mapped since the first check. */
+			if (!sc->may_unmap)
+				goto keep_locked;
 			if (unlikely(PageTransHuge(page)))
 				flags |= TTU_SPLIT_HUGE_PMD;
 			if (!try_to_unmap_trylock(page, flags, sc->target_vma,
@@ -1622,10 +1626,10 @@ keep:
 	return nr_reclaimed;
 }
 
-#ifdef CONFIG_MI_ASYNC_RECLAIM
+#if defined(CONFIG_MI_ASYNC_RECLAIM) || defined(CONFIG_MI_MTMR)
 /* A single base file page; pgdat keeps shrink_page_list from self-accounting. */
-unsigned long mi_async_reclaim_page(struct list_head *pages,
-				  struct pglist_data *pgdat)
+unsigned long mi_reclaim_file_page(struct list_head *pages,
+				  struct pglist_data *pgdat, bool unmapped_only)
 {
 	struct scan_control sc = {
 		.gfp_mask = GFP_KERNEL,
@@ -1637,7 +1641,9 @@ unsigned long mi_async_reclaim_page(struct list_head *pages,
 	unsigned long reclaimed;
 	struct page *page;
 
-	/* NULL admission state prevents recursive handoff by this kswapd worker. */
+	/* MTMR never unmaps a page remapped after its final eligibility check. */
+	sc.may_unmap = !unmapped_only;
+	/* NULL admission state prevents recursive handoff by either worker. */
 	reclaimed = shrink_page_list(pages, pgdat, &sc, 0, NULL, false, NULL);
 	while (!list_empty(pages)) {
 		page = lru_to_page(pages);
@@ -1949,8 +1955,9 @@ int isolate_lru_page(struct page *page)
 	if (PageLRU(page)) {
 		struct zone *zone = page_zone(page);
 		struct lruvec *lruvec;
+		unsigned long flags;
 
-		spin_lock_irq(zone_lru_lock(zone));
+		spin_lock_irqsave(zone_lru_lock(zone), flags);
 		lruvec = mem_cgroup_page_lruvec(page, zone->zone_pgdat);
 		if (PageLRU(page)) {
 			int lru = page_lru(page);
@@ -1959,7 +1966,7 @@ int isolate_lru_page(struct page *page)
 			del_page_from_lru_list(page, lruvec, lru);
 			ret = 0;
 		}
-		spin_unlock_irq(zone_lru_lock(zone));
+		spin_unlock_irqrestore(zone_lru_lock(zone), flags);
 	}
 	return ret;
 }

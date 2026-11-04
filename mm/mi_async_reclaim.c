@@ -19,6 +19,7 @@
 #include <linux/sched/mm.h>
 #include <linux/vmstat.h>
 #include "mi_async_reclaim.h"
+#include "mi_mtmr.h"
 
 /* One MiB including the running page; independent of device RAM size. */
 #define MI_ASYNC_MAX_PAGES 256
@@ -113,7 +114,7 @@ static int mi_async_worker(void *unused)
 			unsigned long reclaimed;
 
 			list_add(&page->lru, &pages);
-			reclaimed = mi_async_reclaim_page(&pages, pgdat);
+			reclaimed = mi_reclaim_file_page(&pages, pgdat, false);
 			mi_async_complete(1, reclaimed);
 			cond_resched();
 			continue;

@@ -977,6 +977,15 @@ config READAHEAD_LIMIT
 	  Runtime disabled by default; this is an experimental policy.
 	  See Documentation/vm/readahead-limit.rst for controls and limits.
 
+config MI_MTMR
+	bool "MTMR unmapped base file page worker (experimental)"
+	depends on ARM64 && MMU && SYSFS && !MEMORY_HOTPLUG
+	default n
+	help
+	  A runtime-disabled bounded worker for final-unmapped ordinary file
+	  base pages. Uses normal reclaim checks and returns remapped pages.
+	  Requires target memory and concurrency validation before use.
+
 config MI_ASYNC_RECLAIM
 	bool "File-rmap contention reclaim worker (experimental)"
 	depends on ARM64 && MMU && SYSFS && !MEMORY_HOTPLUG
