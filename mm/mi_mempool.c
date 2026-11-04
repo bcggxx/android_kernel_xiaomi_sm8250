@@ -27,6 +27,8 @@ static struct reserve_pool pools[] = {
 	  .order = 0, .high = 1024, .low = 512 },
 	{ .pages = LIST_HEAD_INIT(pools[1].pages),
 	  .order = 1, .high = 128, .low = 64 },
+	{ .pages = LIST_HEAD_INIT(pools[2].pages),
+	  .order = 4, .high = 16, .low = 8 },
 };
 static DECLARE_WAIT_QUEUE_HEAD(refill_wait);
 static struct task_struct *refill_task;
@@ -47,17 +49,25 @@ static struct page *take_page(struct reserve_pool *pool, struct page *page)
 struct page *mi_mempool_borrow(gfp_t gfp, unsigned int order, struct zone *zone)
 {
 	struct page *page, *found = NULL;
-	struct reserve_pool *pool;
+	struct reserve_pool *pool = NULL;
+	unsigned int i;
 	unsigned long flags;
 
-	if (order >= ARRAY_SIZE(pools) || !zone || zone_idx(zone) != ZONE_NORMAL ||
+	if (!zone || zone_idx(zone) != ZONE_NORMAL ||
 	    !(gfp & __GFP_DIRECT_RECLAIM) ||
 	    (gfp & (__GFP_DMA | __GFP_DMA32 | __GFP_HIGHMEM | __GFP_MOVABLE |
 		    __GFP_ATOMIC | __GFP_MEMALLOC | __GFP_NOFAIL)) ||
 	    in_interrupt() || irqs_disabled() || in_atomic() ||
 	    (current->flags & PF_MEMALLOC) || current == READ_ONCE(refill_task))
 		return NULL;
-	pool = &pools[order];
+	/* Supported orders are sparse; an order is never an array index. */
+	for (i = 0; i < ARRAY_SIZE(pools); i++)
+		if (pools[i].order == order) {
+			pool = &pools[i];
+			break;
+		}
+	if (!pool)
+		return NULL;
 	spin_lock_irqsave(&pool_lock, flags);
 	if (enabled) {
 		list_for_each_entry(page, &pool->pages, lru) {
