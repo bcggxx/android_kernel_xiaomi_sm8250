@@ -1003,7 +1003,7 @@ config MI_ASYNC_RECLAIM
 	  See Documentation/vm/mi-async-reclaim.rst.
 
 config MI_MEMPOOL
-	bool "Experimental allocator reserve for orders 0, 1 and 4"
+	bool "Experimental allocator reserve for orders 0, 1, 4 and 5"
 	depends on ARM64 && ARM64_4K_PAGES && SYSFS && !MEMORY_HOTPLUG
 	default n
 	help
