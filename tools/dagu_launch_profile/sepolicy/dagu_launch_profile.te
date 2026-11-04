@@ -7,6 +7,8 @@ type dagu_launch_profile_device, dev_type;
 type dagu_launch_profile_data, file_type, data_file_type;
 system_internal_prop(dagu_launch_profile_enabled_prop)
 set_prop(system_server, dagu_launch_profile_enabled_prop)
+get_prop(system_server, dagu_launch_profile_enabled_prop)
+get_prop(dagu_launch_profile, dagu_launch_profile_enabled_prop)
 userdebug_or_eng(`set_prop(shell, dagu_launch_profile_enabled_prop)')
 get_prop(init, dagu_launch_profile_enabled_prop)
 allow dagu_launch_profile self:capability sys_admin;

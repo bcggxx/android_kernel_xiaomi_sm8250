@@ -33,6 +33,26 @@ struct dlp_snapshot_ops {
 	void *context;
 };
 
+struct dlp_replay_callbacks {
+	int (*cancelled)(void *context);
+	void *context;
+};
+
+struct dlp_replay_result {
+	uint64_t read_requested;
+	uint64_t read_completed;
+	uint32_t files_attempted;
+	uint32_t ranges_attempted;
+	uint32_t short_reads;
+	uint32_t errors;
+	uint32_t profile_invalid;
+	uint32_t budget_stop;
+	uint32_t pressure_stop;
+	uint32_t window_stop;
+	uint32_t cancelled;
+	uint32_t range_limit;
+};
+
 int dlp_metadata_generation(const struct dlp_metadata *metadata,
 			    uint64_t *generation);
 int dlp_publish_profile(const char *root, const struct dlp_metadata *metadata,
@@ -42,5 +62,8 @@ int dlp_invalidate_profile(const char *root, uint32_t user_id,
 int dlp_sweep_profile_store(const char *root);
 int dlp_read_profile(const char *path, struct dlp_profile_header *header,
 		     uint8_t **owned);
+int dlp_replay_profile(const char *root, const struct dlp_metadata *metadata,
+		       const struct dlp_replay_callbacks *callbacks,
+		       struct dlp_replay_result *result);
 
 #endif

@@ -15,6 +15,3 @@ on post-fs-data
 
 on property:sys.dagu_launch_profile.enabled=1
     start dagu_launch_profile
-
-on property:sys.dagu_launch_profile.enabled=0
-    stop dagu_launch_profile

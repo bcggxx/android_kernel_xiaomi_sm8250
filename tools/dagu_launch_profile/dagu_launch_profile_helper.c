@@ -5,6 +5,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +24,7 @@
 
 #ifdef __ANDROID__
 #include <cutils/sockets.h>
+#include <cutils/properties.h>
 #endif
 
 #define DLP_PROFILE_ROOT "/data/misc/dagu_launch_profile"
@@ -50,10 +52,39 @@ struct profile_job {
 	int snapshot_fd;
 };
 
+struct replay_job {
+	struct replay_job *next;
+	struct connection *connection;
+	uint8_t *packet;
+	size_t packet_size;
+	uint64_t epoch;
+	uint64_t cookie;
+	uint64_t generation;
+	atomic_int cancelled;
+};
+
 static pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t queue_cond = PTHREAD_COND_INITIALIZER;
 static struct profile_job *queue_head, *queue_tail;
 static unsigned int queue_count, queue_running;
+static pthread_mutex_t replay_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t replay_cond = PTHREAD_COND_INITIALIZER;
+static struct replay_job *replay_head, *replay_tail, *replay_current;
+static unsigned int replay_queued;
+static int dlp_exit_requested;
+
+static int service_disabled(void)
+{
+#ifdef __ANDROID__
+	char value[PROP_VALUE_MAX] = {0};
+
+	if (property_get("sys.dagu_launch_profile.enabled", value, "0") <= 0)
+		return 1;
+	return !strcmp(value, "0");
+#else
+	return 0;
+#endif
+}
 
 static int valid_package(const char *name, size_t length)
 {
@@ -282,6 +313,165 @@ static int connection_cancelled(void *context)
 	cancelled = job->connection->cancelled;
 	pthread_mutex_unlock(&job->connection->lock);
 	return cancelled;
+}
+
+static int replay_cancelled(void *context)
+{
+	struct replay_job *job = context;
+	int connection_cancelled_now;
+
+	if (atomic_load(&job->cancelled))
+		return 1;
+	pthread_mutex_lock(&job->connection->lock);
+	connection_cancelled_now = job->connection->cancelled;
+	pthread_mutex_unlock(&job->connection->lock);
+	return connection_cancelled_now;
+}
+
+static void replay_job_free(struct replay_job *job)
+{
+	connection_put(job->connection);
+	free(job->packet);
+	free(job);
+}
+
+static void *replay_worker(void *unused)
+{
+	(void)unused;
+	for (;;) {
+		struct replay_job *job;
+		struct wire_message message;
+		struct dlp_replay_callbacks callbacks = {
+			.cancelled = replay_cancelled,
+		};
+		struct dlp_replay_result result;
+		int ret;
+
+		pthread_mutex_lock(&replay_lock);
+		while (!replay_head)
+			pthread_cond_wait(&replay_cond, &replay_lock);
+		job = replay_head;
+		replay_head = job->next;
+		if (!replay_head)
+			replay_tail = NULL;
+		replay_queued--;
+		replay_current = job;
+		pthread_mutex_unlock(&replay_lock);
+		callbacks.context = job;
+		memset(&result, 0, sizeof(result));
+		ret = parse_wire(job->packet, job->packet_size, &message) ?
+			-EINVAL :
+			dlp_replay_profile(DLP_PROFILE_ROOT, &message.metadata,
+					   &callbacks, &result);
+		fprintf(stderr,
+			"dagu_launch_profile: replay cookie=%llu ret=%d requested=%llu completed=%llu files=%u ranges=%u short=%u errors=%u invalid=%u budget=%u pressure=%u window=%u cancelled=%u range_limit=%u\n",
+			(unsigned long long)job->cookie, ret,
+			(unsigned long long)result.read_requested,
+			(unsigned long long)result.read_completed,
+			result.files_attempted, result.ranges_attempted,
+			result.short_reads, result.errors, result.profile_invalid,
+			result.budget_stop, result.pressure_stop, result.window_stop,
+			result.cancelled, result.range_limit);
+		pthread_mutex_lock(&replay_lock);
+		replay_current = NULL;
+		pthread_cond_broadcast(&replay_cond);
+		pthread_mutex_unlock(&replay_lock);
+		replay_job_free(job);
+	}
+	return NULL;
+}
+
+static void replay_cancel_all(void)
+{
+	pthread_mutex_lock(&replay_lock);
+	if (replay_current)
+		atomic_store(&replay_current->cancelled, 1);
+	for (struct replay_job *job = replay_head; job; job = job->next)
+		atomic_store(&job->cancelled, 1);
+	pthread_mutex_unlock(&replay_lock);
+}
+
+static void replay_cancel(uint64_t epoch, uint64_t cookie)
+{
+	pthread_mutex_lock(&replay_lock);
+	if (replay_current && replay_current->epoch == epoch &&
+	    replay_current->cookie == cookie)
+		atomic_store(&replay_current->cancelled, 1);
+	for (struct replay_job *job = replay_head; job; job = job->next)
+		if (job->epoch == epoch && job->cookie == cookie)
+			atomic_store(&job->cancelled, 1);
+	pthread_mutex_unlock(&replay_lock);
+}
+
+static void replay_wait_idle(void)
+{
+	pthread_mutex_lock(&replay_lock);
+	while (replay_current || replay_head)
+		pthread_cond_wait(&replay_cond, &replay_lock);
+	pthread_mutex_unlock(&replay_lock);
+}
+
+static int replay_start(struct connection *connection, const uint8_t *packet,
+			size_t packet_size, uint64_t epoch, uint64_t cookie,
+			uint64_t generation)
+{
+	struct replay_job *job;
+	struct replay_job *dropped = NULL;
+	int ret = 0;
+
+	pthread_mutex_lock(&replay_lock);
+	if (replay_current && replay_current->epoch == epoch &&
+	    replay_current->cookie == cookie &&
+	    replay_current->generation == generation) {
+		pthread_mutex_unlock(&replay_lock);
+		return 0;
+	}
+	for (struct replay_job *queued = replay_head; queued;
+	     queued = queued->next) {
+		if (queued->epoch == epoch && queued->cookie == cookie &&
+		    queued->generation == generation) {
+			pthread_mutex_unlock(&replay_lock);
+			return 0;
+		}
+	}
+	if (replay_current)
+		atomic_store(&replay_current->cancelled, 1);
+	dropped = replay_head;
+	replay_head = NULL;
+	replay_tail = NULL;
+	replay_queued = 0;
+	pthread_mutex_unlock(&replay_lock);
+	while (dropped) {
+		struct replay_job *next = dropped->next;
+
+		replay_job_free(dropped);
+		dropped = next;
+	}
+	job = calloc(1, sizeof(*job));
+	if (!job)
+		return -ENOMEM;
+	job->packet = malloc(packet_size);
+	if (!job->packet) {
+		free(job);
+		return -ENOMEM;
+	}
+	memcpy(job->packet, packet, packet_size);
+	job->packet_size = packet_size;
+	job->connection = connection_get(connection);
+	job->epoch = epoch;
+	job->cookie = cookie;
+	job->generation = generation;
+	atomic_init(&job->cancelled, 0);
+	pthread_mutex_lock(&replay_lock);
+	if (replay_tail)
+		replay_tail->next = job;
+	else
+		replay_head = job;
+	replay_tail = job;
+	replay_queued++;
+	pthread_cond_signal(&replay_cond);
+	pthread_mutex_unlock(&replay_lock);
+	return ret;
 }
 
 static int job_snapshot(void *context, int *snapshot_fd)
@@ -581,8 +771,11 @@ static void serve(int peer)
 			continue;
 		if (ready < 0 || (poll_fd.revents & (POLLHUP | POLLERR | POLLNVAL)))
 			break;
-		if (!(poll_fd.revents & POLLIN))
+		if (!(poll_fd.revents & POLLIN)) {
+			if (service_disabled())
+				break;
 			continue;
+		}
 		if (receive(peer, packet, DLP_WIRE_MAX_PACKET, &packet_size,
 			    &received_fd))
 			break;
@@ -647,6 +840,11 @@ static void serve(int peer)
 			}
 			prepared_active = 1;
 			ret = 0;
+			if (replay_start(connection, packet, packet_size, epoch,
+					 message.header.cookie,
+					 message.header.metadata_generation))
+				fprintf(stderr,
+					"dagu_launch_profile: replay enqueue skipped\n");
 			break;
 		case DLP_OP_BEGIN:
 			if (received_fd < 0 || !prepared_active || kernel_active) {
@@ -713,6 +911,7 @@ static void serve(int peer)
 			if (!ret)
 				ret = queue_job(connection, packet, packet_size,
 						snapshot_fd);
+			replay_cancel(message.header.epoch, message.header.cookie);
 			if (!ret) {
 				free(prepared_packet);
 				prepared_packet = NULL;
@@ -725,6 +924,7 @@ static void serve(int peer)
 				ret = -EINVAL;
 				break;
 			}
+			replay_cancel(message.header.epoch, message.header.cookie);
 			if (kernel_active &&
 			    message.header.cookie != prepared.header.cookie) {
 				ret = -ESRCH;
@@ -760,6 +960,7 @@ static void serve(int peer)
 			 * the final visible state cannot be repopulated by the worker.
 			 */
 			wait_jobs();
+			replay_cancel_all();
 			ret = invalidate(&message) ? -errno : 0;
 			break;
 		case DLP_OP_OFF:
@@ -769,6 +970,8 @@ static void serve(int peer)
 				break;
 			}
 			wait_jobs();
+			replay_cancel_all();
+			replay_wait_idle();
 			enable.flags = 0;
 			enable.epoch = epoch;
 			ret = ioctl(connection->controller, DLP_IOCTL, &enable) ?
@@ -779,6 +982,7 @@ static void serve(int peer)
 			prepared_active = 0;
 			if (send_ack(peer, &message, ret))
 				goto out;
+			dlp_exit_requested = 1;
 			goto out;
 		default:
 			if (received_fd >= 0)
@@ -810,7 +1014,7 @@ out:
 int main(void)
 {
 	int listener;
-	pthread_t worker;
+	pthread_t worker, replay;
 
 	if (dlp_sweep_profile_store(DLP_PROFILE_ROOT))
 		fprintf(stderr, "dagu_launch_profile: profile sweep failed: %s\n",
@@ -820,6 +1024,11 @@ int main(void)
 		return 1;
 	}
 	pthread_detach(worker);
+	if (pthread_create(&replay, NULL, replay_worker, NULL)) {
+		fprintf(stderr, "dagu_launch_profile: cannot start replay worker\n");
+		return 1;
+	}
+	pthread_detach(replay);
 #ifdef __ANDROID__
 	listener = android_get_control_socket("dagu_launch_profile");
 #else
@@ -830,7 +1039,25 @@ int main(void)
 		return 1;
 	}
 	for (;;) {
-		int peer = accept4(listener, NULL, NULL, SOCK_CLOEXEC);
+		struct pollfd listener_poll = {
+			.fd = listener,
+			.events = POLLIN,
+		};
+		int ready;
+		int peer;
+
+		if (dlp_exit_requested || service_disabled())
+			break;
+		ready = poll(&listener_poll, 1, 1000);
+		if (ready < 0 && errno == EINTR)
+			continue;
+		if (ready < 0)
+			break;
+		if (!ready)
+			continue;
+		if (!(listener_poll.revents & POLLIN))
+			break;
+		peer = accept4(listener, NULL, NULL, SOCK_CLOEXEC);
 
 		if (peer < 0 && errno == EINTR)
 			continue;
@@ -838,4 +1065,9 @@ int main(void)
 			return 1;
 		serve(peer);
 	}
+	replay_cancel_all();
+	replay_wait_idle();
+	wait_jobs();
+	close(listener);
+	return 0;
 }

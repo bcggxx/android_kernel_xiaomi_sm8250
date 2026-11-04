@@ -56,6 +56,12 @@ static int fake_cancelled(void *context)
 	return 0;
 }
 
+static int replay_cancel_immediately(void *context)
+{
+	(void)context;
+	return 1;
+}
+
 static void metadata_generation_test(struct dlp_metadata *metadata)
 {
 	uint64_t generation, altered;
@@ -221,6 +227,21 @@ int main(void)
 			metadata.user_id, metadata.package, DLP_PROFILE_FILE) >= 0);
 	verify_profile(profile_path, &metadata, base_path, expected_digest,
 		       sizeof(content));
+	struct dlp_replay_result replay;
+	struct dlp_replay_callbacks callbacks = {
+		.cancelled = replay_cancel_immediately,
+	};
+	assert(dlp_replay_profile(read_root, &metadata, NULL, &replay) == 0);
+	fprintf(stderr, "replay requested=%llu completed=%llu files=%u ranges=%u\n",
+		(unsigned long long)replay.read_requested,
+		(unsigned long long)replay.read_completed,
+		replay.files_attempted, replay.ranges_attempted);
+	assert(replay.files_attempted == 1 && replay.ranges_attempted == 1);
+	assert(replay.read_requested == sizeof(content));
+	assert(replay.read_completed == sizeof(content));
+	assert(dlp_replay_profile(read_root, &metadata, &callbacks, &replay) ==
+		       -ECANCELED);
+	assert(replay.read_completed == 0 && replay.cancelled == 1);
 
 	/* Truncated snapshots and altered metadata generations never replace it. */
 	uint8_t old_digest[32], new_digest[32];
@@ -232,6 +253,9 @@ int main(void)
 	fake.truncated = 0;
 	((uint8_t (*)[32])metadata.signers)[0][0] ^= 1;
 	assert(dlp_publish_profile(read_root, &metadata, &operations) != 0);
+	assert(dlp_replay_profile(read_root, &metadata, NULL, &replay) ==
+		       -ESTALE);
+	assert(replay.profile_invalid == 1 && replay.read_completed == 0);
 	((uint8_t (*)[32])metadata.signers)[0][0] ^= 1;
 	fd = open(profile_path, O_RDONLY | O_CLOEXEC);
 	assert(fd >= 0 && dlp_sha256_fd(fd, new_digest) == 0);
@@ -257,6 +281,6 @@ int main(void)
 	free(root_template);
 	free(tree_template);
 	free(user_path);
-	puts("production DLP2/profile publish: EOF trim, digest, atomic reject, invalidate passed");
+	puts("production DLP2/profile publish+replay: EOF trim, digest, atomic reject, bounded read, cancel, invalidate passed");
 	return 0;
 }

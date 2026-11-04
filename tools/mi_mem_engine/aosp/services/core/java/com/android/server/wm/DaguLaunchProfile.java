@@ -60,6 +60,7 @@ final class DaguLaunchProfile {
     private static final int OP_FINISH = 3;
     private static final int OP_ABORT = 4;
     private static final int OP_INVALIDATE = 5;
+    private static final int OP_OFF = 6;
     private static final int PATH_BASE_APK = 1;
     private static final int PATH_SPLIT_APK = 2;
     private static final int PATH_NATIVE_DIR = 3;
@@ -174,6 +175,9 @@ final class DaguLaunchProfile {
         final AtomicInteger state = new AtomicInteger();
         int handle;
         Metadata metadata;
+        volatile boolean replayPosted;
+        volatile boolean replayPrepared;
+        volatile long replayGeneration;
         MiMemEngineDeathRegistration death;
     }
 
@@ -185,6 +189,7 @@ final class DaguLaunchProfile {
         thread.start();
         mWorker = new Handler(thread.getLooper());
         mWorker.post(this::registerInvalidationReceiver);
+        mWorker.post(this::monitorEnabledProperty);
     }
 
     Session pending() {
@@ -202,6 +207,10 @@ final class DaguLaunchProfile {
         if (session.process == null) session.process = expected;
         session.packageName = activity.packageName;
         session.userId = activity.mUserId;
+        if (!session.replayPosted && session.state.get() < 3) {
+            session.replayPosted = true;
+            mWorker.post(() -> prepareReplay(session));
+        }
         if (activity.app != null) attached(session, activity, activity.app);
     }
 
@@ -231,6 +240,32 @@ final class DaguLaunchProfile {
             if (prior >= 3) return;
         } while (!session.state.compareAndSet(prior, success ? 3 : 4));
         mWorker.post(() -> complete(session));
+    }
+
+    private void prepareReplay(Session session) {
+        try {
+            if (session.state.get() >= 3 || session.epoch != mEpoch.get()) return;
+            Metadata metadata = queryMetadata(session.packageName, session.userId);
+            if (metadata == null
+                    || (session.uid != 0 && metadata.uid != session.uid)
+                    || session.state.get() >= 3 || session.epoch != mEpoch.get()) return;
+            synchronized (mSupervisor.mService.mGlobalLock) {
+                if (session.activity == null
+                        || !session.packageName.equals(session.activity.packageName)
+                        || session.activity.mUserId != session.userId
+                        || session.state.get() >= 3 || session.epoch != mEpoch.get()) return;
+            }
+            ensureSocket();
+            if (mActive != null && mActive != session) abortActive(true);
+            sendMetadata(OP_PREPARE, session, metadata, null);
+            session.replayGeneration = metadata.generation;
+            session.replayPrepared = true;
+            flushInvalidations();
+        } catch (IOException | RuntimeException e) {
+            Slog.w(TAG, "launch replay prepare failed", e);
+            disconnect();
+            abortSession(session, false);
+        }
     }
 
     private void prepare(Session session) {
@@ -271,7 +306,12 @@ final class DaguLaunchProfile {
             }
             ensureSocket();
             if (mActive != null && mActive != session) abortActive(true);
-            sendMetadata(OP_PREPARE, session, metadata, null);
+            if (!session.replayPrepared
+                    || session.replayGeneration != metadata.generation) {
+                sendMetadata(OP_PREPARE, session, metadata, null);
+                session.replayGeneration = metadata.generation;
+                session.replayPrepared = true;
+            }
             session.metadata = metadata;
             sendBegin(session, metadata, binderFd);
             mActive = session;
@@ -295,6 +335,13 @@ final class DaguLaunchProfile {
     private void complete(Session session) {
         try {
             if (mActive != session) {
+                if (session.replayPrepared && mSocket != null) {
+                    try {
+                        sendAbort(session);
+                    } catch (IOException ignored) {
+                        disconnect();
+                    }
+                }
                 release(session);
                 return;
             }
@@ -340,13 +387,14 @@ final class DaguLaunchProfile {
     private void abortSession(Session session, boolean sendPacket) {
         session.state.set(4);
         if (mActive == session) mActive = null;
-        if (sendPacket && mSocket != null) {
+        if (sendPacket && session.replayPrepared && mSocket != null) {
             try {
                 sendAbort(session);
             } catch (IOException ignored) {
                 disconnect();
             }
         }
+        session.replayPrepared = false;
         release(session);
     }
 
@@ -487,7 +535,8 @@ final class DaguLaunchProfile {
         packet.putInt(WIRE_MAGIC).putShort((short) WIRE_VERSION).putShort((short) size);
         packet.putInt(operation).putInt(flags);
         packet.putLong(session.epoch).putLong(session.cookie);
-        packet.putInt(session.userId).putInt(session.uid);
+        packet.putInt(session.userId).putInt(metadata == null
+                ? session.uid : metadata.uid);
         packet.putLong(metadata == null ? 0 : metadata.generation);
         packet.putLong(metadata == null ? 0 : metadata.longVersionCode);
         packet.putInt(packageLength).putInt(pathCount).putInt(signerCount).putInt(0);
@@ -528,6 +577,7 @@ final class DaguLaunchProfile {
         mEpoch.incrementAndGet();
         if (mActive != null) {
             mActive.state.set(4);
+            mActive.replayPrepared = false;
             release(mActive);
             mActive = null;
         }
@@ -608,6 +658,43 @@ final class DaguLaunchProfile {
         } catch (IOException | RuntimeException e) {
             disconnect();
         }
+    }
+
+    private void checkEnabledProperty() {
+        if (android.os.SystemProperties.getBoolean(ENABLED_PROPERTY, false)) return;
+        if (mActive != null) {
+            mActive.state.set(4);
+            mActive.replayPrepared = false;
+            release(mActive);
+            mActive = null;
+        }
+        if (mSocket != null) {
+            try {
+                sendOff();
+            } catch (IOException | RuntimeException e) {
+                Slog.w(TAG, "profile OFF acknowledgement unavailable", e);
+            }
+        }
+        disconnect();
+    }
+
+    private void monitorEnabledProperty() {
+        boolean enabled = android.os.SystemProperties.getBoolean(ENABLED_PROPERTY, false);
+        if (!enabled) checkEnabledProperty();
+        mWorker.postDelayed(this::monitorEnabledProperty, enabled ? 1000 : 5000);
+    }
+
+    private void sendOff() throws IOException {
+        long cookie = NEXT_COOKIE.incrementAndGet();
+        long epoch = mEpoch.get();
+        ByteBuffer packet = ByteBuffer.allocate(WIRE_HEADER_SIZE)
+                .order(ByteOrder.LITTLE_ENDIAN);
+        packet.putInt(WIRE_MAGIC).putShort((short) WIRE_VERSION)
+                .putShort((short) WIRE_HEADER_SIZE).putInt(OP_OFF).putInt(0);
+        packet.putLong(epoch).putLong(cookie);
+        packet.putInt(0).putInt(0).putLong(0).putLong(0);
+        packet.putInt(0).putInt(0).putInt(0).putInt(0);
+        sendPacket(packet, cookie, epoch, null);
     }
 
     private boolean sendInvalidation(Invalidation invalidation) throws IOException {
