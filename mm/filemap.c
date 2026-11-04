@@ -39,6 +39,7 @@
 #include <linux/delayacct.h>
 #include <linux/psi.h>
 #include "internal.h"
+#include "mi_mtmr.h"
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/filemap.h>
@@ -916,6 +917,7 @@ int add_to_page_cache_lru(struct page *page, struct address_space *mapping,
 		if (!(gfp_mask & __GFP_WRITE) && shadow)
 			workingset_refault(page, shadow);
 		lru_cache_add(page);
+		mi_mtmr_ra_inserted(page);
 	}
 	return ret;
 }

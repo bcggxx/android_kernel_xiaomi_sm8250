@@ -26,6 +26,7 @@
 #include <trace/events/filemap.h>
 
 #include "internal.h"
+#include "mi_mtmr.h"
 
 /* Observation only: no sampling on the disabled tracepoint path. */
 static void readahead_trace_window(struct address_space *mapping, pgoff_t offset,
@@ -190,10 +191,11 @@ out:
  *
  * Returns the number of pages requested, or the maximum amount of I/O allowed.
  */
-unsigned int __do_page_cache_readahead(struct address_space *mapping,
+static unsigned int do_page_cache_readahead_ctx(struct address_space *mapping,
 		struct file *filp, pgoff_t offset, unsigned long nr_to_read,
-		unsigned long lookahead_size)
+		unsigned long lookahead_size, const struct ra_context *ctx)
 {
+	int producer;
 	struct inode *inode = mapping->host;
 	struct page *page;
 	unsigned long end_index;	/* The last page we want to read */
@@ -241,6 +243,14 @@ unsigned int __do_page_cache_readahead(struct address_space *mapping,
 		if (!page)
 			break;
 		page->index = page_offset;
+		/* Exact caller demand excludes every page in the requested range.
+		 * Missing context is conservative: never guess from marker bits or
+		 * position in a shifted/limited readahead window.
+		 */
+		if (ctx && ctx->demand_size &&
+		    !(page_offset >= ctx->demand &&
+		      page_offset - ctx->demand < ctx->demand_size))
+			mi_mtmr_ra_prepare(page, &producer);
 		list_add(&page->lru, &page_pool);
 		if (page_idx == nr_to_read - lookahead_size)
 			SetPageReadahead(page);
@@ -256,7 +266,16 @@ unsigned int __do_page_cache_readahead(struct address_space *mapping,
 		read_pages(mapping, filp, &page_pool, nr_pages, gfp_mask);
 	BUG_ON(!list_empty(&page_pool));
 out:
+	mi_mtmr_ra_complete(&producer);
 	return nr_pages;
+}
+
+unsigned int __do_page_cache_readahead(struct address_space *mapping,
+		struct file *filp, pgoff_t offset, unsigned long nr_to_read,
+		unsigned long lookahead_size)
+{
+	return do_page_cache_readahead_ctx(mapping, filp, offset, nr_to_read,
+			lookahead_size, NULL);
 }
 
 /*
@@ -313,7 +332,7 @@ unsigned long ra_submit_ctx(struct file_ra_state *ra,
 		ra->size = size;
 		ra->async_size = async;
 	}
-	return __do_page_cache_readahead(mapping, filp, start, size, async);
+	return do_page_cache_readahead_ctx(mapping, filp, start, size, async, ctx);
 }
 
 /*

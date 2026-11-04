@@ -86,3 +86,8 @@ serial scan functions. Its iterator and watermarks are substitutes: it checks
 control and reference protocol only, not real memcg offline, shrinkers, RCU,
 freezer or pressure behavior. Real kswapd/multi-memcg/disable validation remains
 required before claiming functional acceptance.
+
+mi_mtmr_ra: finite actual producer pin, insertion, completion, age, bounded
+shrinker release and per-policy close checks. Host adapters do not execute real
+FS submission, IO, pagecache, LRU, PTE, RCU or freezer races. The required real
+FS -> age -> normal reclaim/return -> disable seam remains unrun.
