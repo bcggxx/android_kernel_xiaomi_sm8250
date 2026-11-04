@@ -1,0 +1,3 @@
+/system/bin/dagu_launch_profile_helper  u:object_r:dagu_launch_profile_exec:s0
+/dev/socket/dagu_launch_profile         u:object_r:dagu_launch_profile_socket:s0
+/dev/dagu_launch_profile                u:object_r:dagu_launch_profile_device:s0
