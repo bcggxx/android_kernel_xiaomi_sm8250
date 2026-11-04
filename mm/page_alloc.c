@@ -18,6 +18,7 @@
 #include <linux/mm.h>
 #include <linux/swap.h>
 #include <linux/mi_mempool.h>
+#include <linux/mi_reclaim_pool.h>
 #include <linux/interrupt.h>
 #include <linux/pagemap.h>
 #include <linux/jiffies.h>
@@ -3092,6 +3093,7 @@ void free_unref_page(struct page *page)
 	free_unref_page_commit(page, pfn);
 	local_irq_restore(flags);
 	mi_mempool_free_event();
+	mi_reclaim_pool_free_event();
 }
 
 /*
@@ -4724,6 +4726,22 @@ retry:
 	if (fatal_signal_pending(current) && !(gfp_mask & __GFP_NOFAIL) &&
 			(gfp_mask & __GFP_FS))
 		goto nopage;
+
+	/* Prepared reserve pages retain normal outer memcg charge and trace. */
+	if (ac->preferred_zoneref && ac->preferred_zoneref->zone &&
+	    zone_idx(ac->preferred_zoneref->zone) <= ac->high_zoneidx &&
+	    (!ac->nodemask || node_isset(zone_to_nid(ac->preferred_zoneref->zone),
+				       *ac->nodemask)) &&
+	    cpuset_zone_allowed(ac->preferred_zoneref->zone, gfp_mask)) {
+		page = mi_reclaim_pool_borrow(gfp_mask, order,
+					    ac->preferred_zoneref->zone);
+		if (page) {
+			/* Already post_alloc_hook/prep'd once by refill. */
+			if (want_init_on_alloc(gfp_mask))
+				kernel_init_free_pages(page, 1);
+			goto got_pg;
+		}
+	}
 
 	/* Try direct reclaim and then allocating */
 	page = __alloc_pages_direct_reclaim(gfp_mask, order, alloc_flags, ac,

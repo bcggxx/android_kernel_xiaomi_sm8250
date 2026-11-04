@@ -1,5 +1,5 @@
 Dagu host regression tests
-============
+=====
 
 These tests compile functions extracted from the kernel sources against small
 userspace substitutes. They need Python 3, a native C compiler with sanitizer
@@ -73,6 +73,13 @@ See Documentation/vm/mi-async-reclaim.rst for the required real memory seam.
 The mi_fault_around check extracts the control/decision C functions and uses
 host adapters for kernel APIs. It covers boundaries, collision, error retention,
 readback and switching; it does not validate real mmap/PTEs or concurrency.
+
+mi_reclaim_pool: finite extracted actual owner acquire/release and complete
+borrow entry check. Covers C21/C22 exclusivity, effective RT priority including
+PI and excluding negative DL, GFP/context/worker/zone gates, pool-empty fallback
+and page/vmstat ownership transfer. Kernel list, lock and task adapters are
+limited host substitutes. Real direct-reclaim hook, cpuset/nodemask race, zero
+and memcg, shrinker/refill and stop concurrency require device acceptance.
 
 The global slab check extracts admission, mode control, pending take and
 serial scan functions. Its iterator and watermarks are substitutes: it checks

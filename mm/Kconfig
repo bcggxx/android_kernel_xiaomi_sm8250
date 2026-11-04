@@ -1007,3 +1007,13 @@ config MI_FAULT_AROUND
 	  file fault-around mappings. Demand faults are unchanged. Runtime
 	  disabled by default; independent of readahead window policies.
 	  See Documentation/vm/mi-fault-around.rst.
+
+config MI_RECLAIM_POOL
+	bool "Prepared order-zero reserve for effective RT allocations"
+	depends on ARM64 && ARM64_4K_PAGES && SYSFS && !MEMORY_HOTPLUG
+	default n
+	help
+	  Independent C22 refill reserve, disabled at runtime by default.
+	  Allows eligible effective-RT slowpath allocations to borrow before
+	  direct reclaim. Exclusive with MI_MEMPOOL through allocator owner.
+	  Does not capture freed pages or implement donor QoS policy.
