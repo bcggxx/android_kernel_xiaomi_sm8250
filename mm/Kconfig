@@ -978,12 +978,14 @@ config READAHEAD_LIMIT
 	  See Documentation/vm/readahead-limit.rst for controls and limits.
 
 config MI_MTMR
-	bool "MTMR unmapped base file page worker (experimental)"
+	bool "MTMR base file page worker (experimental)"
 	depends on ARM64 && MMU && SYSFS && !MEMORY_HOTPLUG
 	default n
 	help
 	  A runtime-disabled bounded worker for final-unmapped ordinary file
-	  base pages. Uses normal reclaim checks and returns remapped pages.
+	  base pages and speculative pages with exact demand context. Shares one
+	  worker, uses normal reclaim checks and returns remapped pages.
+	  Readahead metadata pins have a bounded age and pressure release.
 	  Requires target memory and concurrency validation before use.
 
 config MI_ASYNC_RECLAIM

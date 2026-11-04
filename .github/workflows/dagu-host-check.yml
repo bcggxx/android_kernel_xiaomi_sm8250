@@ -6,6 +6,9 @@ on:
       - drivers/block/zram/zram_drv.c
       - drivers/block/zram/zram_drv.h
       - fs/f2fs/file.c
+      - mm/mi_mtmr.c
+      - mm/mi_mtmr.h
+      - mm/Kconfig
       - mm/kshrink_slabd.c
       - mm/mi_rmap_efficiency.c
       - mm/mi_rmap_efficiency.h

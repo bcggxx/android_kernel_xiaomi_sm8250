@@ -9,9 +9,15 @@ unsigned long mi_reclaim_file_page(struct list_head *pages,
 		struct pglist_data *pgdat, bool unmapped_only);
 #endif
 #ifdef CONFIG_MI_MTMR
+void mi_mtmr_ra_prepare(struct page *page, void *producer);
+void mi_mtmr_ra_inserted(struct page *page);
+void mi_mtmr_ra_complete(void *producer);
 void mi_mtmr_nomap(struct page *page);
 void mi_mtmr_remap(struct page *page);
 #else
+static inline void mi_mtmr_ra_prepare(struct page *page, void *producer) { }
+static inline void mi_mtmr_ra_inserted(struct page *page) { }
+static inline void mi_mtmr_ra_complete(void *producer) { }
 static inline void mi_mtmr_nomap(struct page *page) { }
 static inline void mi_mtmr_remap(struct page *page) { }
 #endif
