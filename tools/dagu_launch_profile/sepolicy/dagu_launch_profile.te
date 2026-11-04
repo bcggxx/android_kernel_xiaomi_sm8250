@@ -19,9 +19,9 @@ allow dagu_launch_profile binder_device:chr_file { read write };
 neverallow { domain -system_server -init } dagu_launch_profile_socket:sock_file write;
 neverallow { domain -system_server -dagu_launch_profile } dagu_launch_profile:unix_stream_socket connectto;
 
-# Exported immutable snapshot and original file descriptions are metadata-only
-# in ticket07. No app data content reads or persistence are enabled here.
+# Independent readonly reopen needs open/read checks even though ticket07
+# consumes metadata only. Deliberately grant no mutable app-data file access.
 allow dagu_launch_profile appdomain:fd use;
-allow dagu_launch_profile { apk_data_file dalvikcache_data_file system_file vendor_file }:file getattr;
+allow dagu_launch_profile { apk_data_file dalvikcache_data_file system_file vendor_file }:file { open read getattr };
 # Snapshot anonymous file metadata/read path is owned by this helper domain.
 allow dagu_launch_profile self:file { read getattr };

@@ -38,7 +38,7 @@ opens of the same pinned inode/mount/mapping merge;
 no bare dev/ino identity survives a file reference. Unique-page budget is
 32MiB, additionally bounded by the 4096 per-open records (16MiB with 4KiB
 pages). Independent opens can therefore exhaust the raw budget before the
-freeze-time union reaches32MiB; this is conservative truncation, not silent
+freeze-time union reaches 32MiB; this is conservative truncation, not silent
 loss presented as complete. Mutable-file/version acceptance belongs to the
 consumer validation/persistence slice; pinning an inode alone proves no
 content immutability.
