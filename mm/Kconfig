@@ -986,6 +986,8 @@ config MI_MTMR
 	  base pages and speculative pages with exact demand context. Shares one
 	  worker, uses normal reclaim checks and returns remapped pages.
 	  Readahead metadata pins have a bounded age and pressure release.
+	  Enabling the readahead policy requires READAHEAD_LIMIT for the
+	  current exact-context read/mmap producers; nomap is independent.
 	  Requires target memory and concurrency validation before use.
 
 config MI_ASYNC_RECLAIM

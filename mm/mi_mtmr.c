@@ -470,6 +470,8 @@ static ssize_t mtmr_enable_store(unsigned int kind, const char *buf, size_t coun
 
 	if (ret)
 		return ret;
+	if (enable && kind == MTMR_RA && !IS_ENABLED(CONFIG_READAHEAD_LIMIT))
+		return -EOPNOTSUPP;
 	ret = mutex_lock_interruptible(&mtmr_control);
 	if (ret)
 		return ret;

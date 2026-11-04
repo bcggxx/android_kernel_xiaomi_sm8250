@@ -55,6 +55,12 @@ classification behavior remain C11/24b work; C11 is not complete.
 Readahead age candidates
 ------------------------
 
+The current exact-context buffered-read and mmap producers require
+``CONFIG_READAHEAD_LIMIT=y``. Without it, writing 1 to ``readahead_enable``
+returns EOPNOTSUPP before starting a worker or enabling the policy. Writing 0
+still succeeds, and ``nomap_enable`` remains independent. With it, the existing
+phase1 runtime controls and readahead windows remain unchanged.
+
 The explicit phase1 ``ra_context`` demand range identifies speculative new
 pages outside the entire current request. The internal ctx submission preserves
 all original dynamic window/range/marker parameters. Legacy callers without
