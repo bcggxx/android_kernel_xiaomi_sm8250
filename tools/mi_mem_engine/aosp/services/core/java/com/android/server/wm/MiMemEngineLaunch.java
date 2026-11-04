@@ -35,12 +35,13 @@ final class MiMemEngineLaunch {
         // 0 pending; 1 BEGIN committed/in flight; 2 cancelled. CAS orders done vs BEGIN.
         final AtomicInteger state = new AtomicInteger();
         int handle;
-        IBinder.DeathRecipient death;
+        final MiMemEngineDeathRegistration death;
         Session(WindowProcessController process) {
             this.process = process;
             pid = process.getPid();
             uid = process.mUid;
             thread = process.getThread().asBinder();
+            death = new MiMemEngineDeathRegistration(thread);
         }
     }
 
@@ -70,7 +71,7 @@ final class MiMemEngineLaunch {
             } catch (IOException e) {
                 disconnect();
             }
-            if (session.death != null) session.thread.unlinkToDeath(session.death, 0);
+            session.death.unlink();
         });
     }
 
@@ -91,10 +92,9 @@ final class MiMemEngineLaunch {
                         || session.process.getThread().asBinder() != session.thread
                         || session.state.get() == 2) return;
             }
-            session.death = () -> end(session);
-            session.thread.linkToDeath(session.death, 0);
+            session.death.link(() -> end(session));
             if (!session.state.compareAndSet(0, 1)) {
-                session.thread.unlinkToDeath(session.death, 0);
+                session.death.unlink();
                 return;
             }
             if (mSocket == null) {
