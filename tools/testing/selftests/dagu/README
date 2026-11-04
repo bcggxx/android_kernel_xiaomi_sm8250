@@ -76,10 +76,13 @@ readback and switching; it does not validate real mmap/PTEs or concurrency.
 
 mi_reclaim_pool: finite extracted actual owner acquire/release and complete
 borrow entry check. Covers C21/C22 exclusivity, effective RT priority including
-PI and excluding negative DL, GFP/context/worker/zone gates, pool-empty fallback
-and page/vmstat ownership transfer. Kernel list, lock and task adapters are
-limited host substitutes. Real direct-reclaim hook, cpuset/nodemask race, zero
-and memcg, shrinker/refill and stop concurrency require device acceptance.
+PI and excluding negative DL, GFP/context/worker/zone gates, raw/prepared borrow
+ordering, pool-empty fallback and page/vmstat ownership transfer. The raw test
+covers the independent control, combined budget, capture ownership and raw drain
+return path. Kernel list, lock and task adapters are limited host substitutes.
+Real free commit/list ownership, direct-reclaim hook, cpuset/nodemask race, zero
+and memcg, KASAN/debug lifecycle, shrinker/refill and stop concurrency require
+device acceptance.
 
 The global slab check extracts admission, mode control, pending take and
 serial scan functions. Its iterator and watermarks are substitutes: it checks

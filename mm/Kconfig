@@ -1022,14 +1022,15 @@ config MI_FAULT_AROUND
 	  See Documentation/vm/mi-fault-around.rst.
 
 config MI_RECLAIM_POOL
-	bool "Prepared order-zero reserve for effective RT allocations"
+	bool "C22 order-zero prepared/raw reserve for effective RT allocations"
 	depends on ARM64 && ARM64_4K_PAGES && SYSFS && !MEMORY_HOTPLUG
 	default n
 	help
 	  Independent C22 refill reserve, disabled at runtime by default.
 	  Allows eligible effective-RT slowpath allocations to borrow before
 	  direct reclaim. Exclusive with MI_MEMPOOL through allocator owner.
-	  Does not capture freed pages or implement donor QoS policy.
+	  Raw free capture is a separate runtime-disabled path. Prepared and raw
+	  pages share a 4 MiB cap. Does not implement donor QoS policy.
 
 config MI_MEM_ENGINE
 	bool "Bounded launch-scene allocation watermark adaptation"
