@@ -1,5 +1,5 @@
-Dagu launch profile collection and publication
-==============================================
+Dagu launch profile collection, publication and replay
+======================================================
 
 This is an independent, default-off 4.19 implementation motivated by the
 iorap2 binary collector/compiler/export evidence. It does not implement or
@@ -89,12 +89,26 @@ profile and 16 MiB/64 packages in total. A different boot, release or version,
 corrupt schema, truncated snapshot or metadata-generation mismatch cannot
 replace the previous valid profile.
 
-This is default-off publication only. Real ``PENDING_ATTACH`` launch replay,
-bounded pread, in-flight cancellation and the replay off acknowledgement remain
-ticket 08b. Host parsing checks and object compilation cannot prove Android
-integration, SELinux enforcement, PTE concurrency, RCU behavior, filesystem
-atomicity, cold-cache I/O or performance. No image or runtime enablement is
-implied by building these sources.
+At the resolved-PENDING association event, system_server sends PREPARE without
+waiting for process attachment. A separate helper replay worker validates the
+stored profile against current package/user/UID/version/signer/path metadata,
+boot and mount identity, and file content identity before issuing synchronous
+``pread64``. It uses a 128KiB scratch buffer with independent 16MiB attempted/
+completed budgets, at most 128 files and 1024 ranges. The 500ms window stops
+submitting another chunk; it is not an interrupt deadline for an in-flight
+filesystem read.
+
+Done, abort, new launch, package/user invalidation, disconnect and task death
+cancel further chunks. OFF cancels replay, waits for the in-flight chunk and
+profile publication, disables the controller and returns an ACK before helper
+process exit. A helper that observes the disabled property without an OFF
+request exits after its bounded shutdown work and does not claim an ACK.
+
+Host parsing checks and object compilation cannot prove Android integration,
+SELinux enforcement, PTE concurrency, RCU behavior, filesystem atomicity,
+cold-cache I/O, pagecache occupancy bounds or performance. No image or runtime
+enablement is implied by building these sources. Parent C03 pre-attach zygote/
+loader, THP/filemap, writable-data and donor-difference gaps remain open.
 
 FINISH revalidates the lease and task after detaching collection and waiting
 for readers. An expired or exited session is dropped with ESRCH even if the

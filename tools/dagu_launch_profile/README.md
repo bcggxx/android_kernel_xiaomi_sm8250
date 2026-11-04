@@ -1,4 +1,4 @@
-# Dagu launch profile: trusted collection and publication
+# Dagu launch profile: trusted collection, publication and replay
 
 Independent default-off implementation for SM8250/dagu, Linux 4.19 and fixed
 AOSP `android-15.0.0_r1`. `CONFIG_DAGU_LAUNCH_PROFILE` and
@@ -36,6 +36,13 @@ worker, so the Java control worker does not hold a Binder reference through
 file hashing. The snapshot retains the existing collector budget until the
 worker closes it.
 
+At the resolved-PENDING association event, Java queues a metadata PREPARE
+without waiting for attach. The helper validates the current package/user/UID/
+version/signer/path generation against the stored 08a profile and enqueues
+replay on a separate worker. The later collector BEGIN does not repeat PREPARE
+unless metadata changed. PREPARE therefore covers the real pre-attach window;
+the attach-after BEGIN is only collection start, never its PENDING substitute.
+
 ## Trusted file and profile publication
 
 For every EXPORT_FILE fd, the helper checks read-only mode, resolves
@@ -62,12 +69,30 @@ Limits are 1 MiB per profile, 16 MiB and 64 packages in total, with oldest
 profile eviction. Startup removes stale tmp files, rejects profiles from a
 different boot/release/version, and verifies schema/CRC/ranges.
 
-This ticket publishes profiles only. It does not select a profile at a real
-`PENDING_ATTACH` event, perform bounded pread, cancel in-flight replay, or claim
-the 08b/off ACK or parent C03 closure. Pre-attach zygote/loader coverage,
-THP/filemap coverage, writable donor data differences, actual AOSP apply/build,
-SELinux enforcement, target RCU/PTE/FS behavior, device launch, physical I/O and
-performance remain unverified.
+## Bounded replay
+
+Replay reloads the stored profile and rechecks boot/release/version, metadata
+generation, package, signers, path allow-list, mount ID, file dev/ino/size/
+ctime/mtime and APK/native digest before reading. It uses a 128KiB scratch
+buffer and synchronous `pread64`, not fadvise or a fake request count. Attempts
+and successful bytes are each capped at 16MiB; at most 128 files and 1024
+ranges are submitted. The 500ms window only prevents submitting the next chunk;
+a synchronous pread already in flight may finish later.
+
+A low-free-memory heuristic, cancellation epoch, new launch, done/abort,
+package/user invalidation, disconnect and task death stop submission of further
+chunks. OFF cancels replay, waits for the in-flight chunk to finish, waits for
+profile publication, disables the kernel controller and ACKs before helper
+process exit. An idle helper also observes the disabled property and exits
+without claiming an OFF ACK. Short reads/errors, budget/window/pressure stops,
+invalid profiles and actual completed bytes are logged separately.
+
+Replay still cannot prove physical cold-cache I/O or bound pagecache occupancy;
+synchronous pread is not hard-cancellable in a blocked filesystem call. Real
+`PENDING_ATTACH`, Android init/SELinux, AOSP apply/build, Java/JNI/Soong,
+filesystem crash durability, target concurrency and performance remain
+unverified. Parent 08/C03 stays open, including pre-attach zygote/loader,
+THP/filemap, writable donor data and donor-difference coverage.
 
 ## Host check
 
@@ -80,9 +105,9 @@ cc -std=gnu11 -Wall -Wextra -Werror -pthread \
 /tmp/dlp-profile-publish-test
 ```
 
-The check drives the production DLP2 parser and snapshot-to-profile publisher.
-It covers metadata-generation mismatch, page-range EOF trimming, real APK
-digest, profile readback validation, atomic non-replacement for
-truncated/mismatched attempts and package invalidation. It does not prove
-Android Java/JNI/Soong/SELinux, HyperOS integration, kernel RCU/PTE/FS
-concurrency, device launch or IO.
+The check drives the production DLP2 parser, snapshot-to-profile publisher and
+profile replay. It covers metadata-generation mismatch, page-range EOF
+trimming, real APK digest, profile readback, atomic non-replacement, bounded
+actual pread, immediate cancellation and package invalidation. It does not
+prove Android Java/JNI/Soong/SELinux, HyperOS integration, kernel RCU/PTE/FS
+concurrency, device launch or physical IO.

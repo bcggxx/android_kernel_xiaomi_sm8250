@@ -11,6 +11,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/sysinfo.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
 #include <time.h>
@@ -63,6 +64,22 @@ struct quota_entry {
 	uint64_t size;
 	int64_t mtime;
 	uint32_t mtime_nsec;
+};
+
+struct replay_file {
+	struct dlp_profile_file identity;
+	char *path;
+	uint32_t range_start;
+};
+
+struct replay_profile {
+	struct dlp_profile_header header;
+	char package[DLP_MAX_PACKAGE + 1];
+	uint8_t signers[DLP_MAX_SIGNERS][32];
+	struct replay_file files[DLP_MAX_PATHS];
+	struct dlp_profile_range ranges[DLP_SNAPSHOT_RANGES];
+	uint32_t file_count;
+	uint32_t range_count;
 };
 
 static void put_u16(uint8_t **cursor, uint16_t value)
@@ -645,6 +662,322 @@ out:
 	if (fd >= 0)
 		close(fd);
 	free(buffer);
+	return ret;
+}
+
+static void replay_profile_clear(struct replay_profile *profile)
+{
+	for (uint32_t i = 0; i < profile->file_count; i++)
+		free(profile->files[i].path);
+	profile->file_count = 0;
+}
+
+static int replay_profile_parse(const uint8_t *buffer,
+				const struct dlp_profile_header *header,
+				struct replay_profile *profile)
+{
+	const uint8_t *cursor = buffer + sizeof(*header);
+	const uint8_t *end = buffer + header->total_size;
+	uint32_t range_offset = 0;
+
+	memset(profile, 0, sizeof(*profile));
+	profile->header = *header;
+	memcpy(profile->package, cursor, header->package_len);
+	profile->package[header->package_len] = '\0';
+	cursor += header->package_len;
+	memcpy(profile->signers, cursor, header->signer_count * 32U);
+	cursor += header->signer_count * 32U;
+	for (uint32_t i = 0; i < header->file_count; i++) {
+		struct replay_file *file = &profile->files[i];
+
+		memcpy(&file->identity, cursor, sizeof(file->identity));
+		cursor += sizeof(file->identity);
+		file->path = malloc(file->identity.path_len + 1U);
+		if (!file->path)
+			goto fail;
+		memcpy(file->path, cursor, file->identity.path_len);
+		file->path[file->identity.path_len] = '\0';
+		profile->file_count = i + 1;
+		cursor += file->identity.path_len;
+		file->range_start = range_offset;
+		if (file->identity.range_count >
+		    DLP_SNAPSHOT_RANGES - range_offset)
+			goto fail;
+		range_offset += file->identity.range_count;
+	}
+	if (range_offset != header->range_count ||
+	    (size_t)(end - cursor) !=
+		    (size_t)range_offset * sizeof(struct dlp_profile_range))
+		goto fail;
+	memcpy(profile->ranges, cursor,
+	       (size_t)range_offset * sizeof(struct dlp_profile_range));
+	profile->range_count = range_offset;
+	return 0;
+fail:
+	replay_profile_clear(profile);
+	return -1;
+}
+
+static int replay_metadata_matches(const struct replay_profile *profile,
+				   const struct dlp_metadata *metadata)
+{
+	const struct dlp_profile_header *header = &profile->header;
+
+	return header->user_id == metadata->user_id &&
+		header->uid == metadata->uid &&
+		header->metadata_generation == metadata->generation &&
+		header->long_version_code == metadata->long_version_code &&
+		header->package_len == metadata->package_len &&
+		header->signer_count == metadata->signer_count &&
+		!memcmp(profile->package, metadata->package, metadata->package_len) &&
+		!memcmp(profile->signers, metadata->signers,
+			metadata->signer_count * 32U);
+}
+
+static int replay_profile_load(const char *root,
+			       const struct dlp_metadata *metadata,
+			       struct replay_profile *profile)
+{
+	struct dlp_profile_header current, header;
+	uint8_t *buffer = NULL;
+	char *path = NULL;
+	int ret = -1;
+
+	if (asprintf(&path, "%s/%u/%.*s/%s", root, metadata->user_id,
+		     metadata->package_len, metadata->package,
+		     DLP_PROFILE_FILE) < 0)
+		return -1;
+	if (dlp_read_profile(path, &header, &buffer))
+		goto out;
+	if (replay_profile_parse(buffer, &header, profile))
+		goto out;
+	if (read_boot_identity(root, &current) ||
+	    strcmp(header.boot_id, current.boot_id) ||
+	    strcmp(header.release, current.release) ||
+	    strcmp(header.version_string, current.version_string) ||
+	    !replay_metadata_matches(profile, metadata)) {
+		errno = ESTALE;
+		replay_profile_clear(profile);
+		goto out;
+	}
+	ret = 0;
+out:
+	free(path);
+	free(buffer);
+	return ret;
+}
+
+static int replay_file_identity_matches(const struct dlp_profile_file *identity,
+					const struct stat *st,
+					uint32_t mount_id)
+{
+	return identity->dev == (uint64_t)st->st_dev &&
+		identity->ino == (uint64_t)st->st_ino &&
+		identity->size == (uint64_t)st->st_size &&
+		identity->ctime_sec == st->st_ctim.tv_sec &&
+		identity->ctime_nsec == (uint32_t)st->st_ctim.tv_nsec &&
+		identity->mtime_sec == st->st_mtim.tv_sec &&
+		identity->mtime_nsec == (uint32_t)st->st_mtim.tv_nsec &&
+		identity->mount_id == mount_id;
+}
+
+static int replay_memory_pressure(void)
+{
+	struct sysinfo info;
+	uint64_t total, free_pages;
+
+	if (sysinfo(&info) || !info.totalram)
+		return 0;
+	total = (uint64_t)info.totalram * info.mem_unit;
+	free_pages = (uint64_t)info.freeram * info.mem_unit;
+	return free_pages < total / 50U;
+}
+
+int dlp_replay_profile(const char *root, const struct dlp_metadata *metadata,
+		       const struct dlp_replay_callbacks *callbacks,
+		       struct dlp_replay_result *result)
+{
+	struct replay_profile profile;
+	struct mount_table mounts;
+	struct timespec started;
+	uint8_t *scratch = NULL;
+	uint64_t read_attempts = 0;
+	int window_started = 0;
+	int ret = -EINVAL;
+
+	if (!root || !metadata || !result)
+		return -EINVAL;
+	memset(result, 0, sizeof(*result));
+	memset(&profile, 0, sizeof(profile));
+	if (replay_profile_load(root, metadata, &profile) ||
+	    mount_table_load(&mounts)) {
+		result->profile_invalid = 1;
+		ret = -ESTALE;
+		goto out;
+	}
+	scratch = malloc(128U * 1024U);
+	if (!scratch) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	ret = 0;
+	for (uint32_t i = 0; i < profile.file_count; i++) {
+		struct replay_file *file = &profile.files[i];
+		const struct dlp_metadata_path *trusted =
+			allowed_path(metadata, file->path);
+		struct stat selected, after;
+		int fd = -1;
+
+		if (callbacks && callbacks->cancelled &&
+		    callbacks->cancelled(callbacks->context)) {
+			result->cancelled++;
+			ret = -ECANCELED;
+			goto out;
+		}
+		if (result->ranges_attempted >= 1024) {
+			result->range_limit = 1;
+			break;
+		}
+		if (!trusted ||
+		    file->identity.mount_id != mount_id_for_path(&mounts, file->path)) {
+			result->profile_invalid++;
+			ret = -ESTALE;
+			goto out;
+		}
+		fd = safe_open_path(file->path, metadata->uid, &selected);
+		if (fd < 0 ||
+		    !replay_file_identity_matches(&file->identity, &selected,
+						 file->identity.mount_id)) {
+			if (fd >= 0)
+				close(fd);
+			result->profile_invalid++;
+			ret = -ESTALE;
+			goto out;
+		}
+		if (file->identity.flags & DLP_PROFILE_DIGEST_COPY) {
+			uint8_t digest[32];
+
+			if (dlp_sha256_fd(fd, digest) ||
+			    memcmp(digest, file->identity.digest, 32)) {
+				close(fd);
+				result->profile_invalid++;
+				ret = -ESTALE;
+				goto out;
+			}
+		}
+		if (fstat(fd, &after) ||
+		    !replay_file_identity_matches(&file->identity, &after,
+						 file->identity.mount_id)) {
+			close(fd);
+			result->profile_invalid++;
+			ret = -ESTALE;
+			goto out;
+		}
+		result->files_attempted++;
+		for (uint32_t j = 0; j < file->identity.range_count; j++) {
+			const struct dlp_profile_range *range =
+				&profile.ranges[file->range_start + j];
+			uint64_t offset = range->offset;
+			uint64_t remaining = range->length;
+
+			if (result->ranges_attempted++ >= 1024) {
+				result->range_limit = 1;
+				break;
+			}
+			while (remaining) {
+				struct timespec now;
+				uint64_t elapsed;
+				size_t requested = remaining > 128U * 1024U ?
+					128U * 1024U : (size_t)remaining;
+				ssize_t completed;
+
+				if (callbacks && callbacks->cancelled &&
+				    callbacks->cancelled(callbacks->context)) {
+					result->cancelled++;
+					close(fd);
+					ret = -ECANCELED;
+					goto out;
+				}
+				if (!window_started) {
+					if (clock_gettime(CLOCK_BOOTTIME, &started)) {
+						close(fd);
+						ret = -errno;
+						goto out;
+					}
+					window_started = 1;
+				} else {
+					if (clock_gettime(CLOCK_BOOTTIME, &now)) {
+						close(fd);
+						ret = -errno;
+						goto out;
+					}
+					elapsed = (uint64_t)(now.tv_sec - started.tv_sec) *
+						1000000000ULL + now.tv_nsec;
+					if (now.tv_nsec >= started.tv_nsec)
+						elapsed -= (uint64_t)started.tv_nsec;
+					else
+						elapsed += 1000000000ULL -
+							(uint64_t)started.tv_nsec;
+					if (elapsed >= 500000000ULL) {
+						result->window_stop++;
+						close(fd);
+						goto out;
+					}
+				}
+				if (replay_memory_pressure()) {
+					result->pressure_stop++;
+					close(fd);
+					goto out;
+				}
+				if (read_attempts >= 16U * 1024U * 1024U) {
+					result->budget_stop++;
+					close(fd);
+					goto out;
+				}
+				if (requested > 16U * 1024U * 1024U -
+				    read_attempts)
+					requested = 16U * 1024U * 1024U -
+						read_attempts;
+				result->read_requested += requested;
+				read_attempts += requested;
+				do {
+					completed = pread(fd, scratch, requested, offset);
+				} while (completed < 0 && errno == EINTR);
+				if (completed < 0) {
+					result->errors++;
+					close(fd);
+					ret = -errno;
+					goto out;
+				}
+				if (!completed) {
+					result->short_reads++;
+					close(fd);
+					goto out;
+				}
+				result->read_completed += (uint64_t)completed;
+				offset += (uint64_t)completed;
+				remaining -= (uint64_t)completed;
+				if ((size_t)completed < requested) {
+					result->short_reads++;
+					close(fd);
+					goto out;
+				}
+				if (read_attempts == 16U * 1024U * 1024U) {
+					result->budget_stop++;
+					close(fd);
+					goto out;
+				}
+			}
+			if (result->range_limit)
+				break;
+		}
+		close(fd);
+		if (result->range_limit)
+			break;
+	}
+out:
+	free(scratch);
+	replay_profile_clear(&profile);
 	return ret;
 }
 
