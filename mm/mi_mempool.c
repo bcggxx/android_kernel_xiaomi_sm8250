@@ -29,6 +29,8 @@ static struct reserve_pool pools[] = {
 	  .order = 1, .high = 128, .low = 64 },
 	{ .pages = LIST_HEAD_INIT(pools[2].pages),
 	  .order = 4, .high = 16, .low = 8 },
+	{ .pages = LIST_HEAD_INIT(pools[3].pages),
+	  .order = 5, .high = 8, .low = 4 },
 };
 static DECLARE_WAIT_QUEUE_HEAD(refill_wait);
 static struct task_struct *refill_task;
