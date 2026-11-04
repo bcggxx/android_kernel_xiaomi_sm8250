@@ -115,20 +115,12 @@ static void unionpower_init_buffer(struct buffer_record *record,
 }
 
 static void
-unionpower_refresh_frame_load_locked(bool new_status, s64 cur_time)
+unionpower_recalculate_frame_jank_locked(s64 cur_time)
 {
 	struct buffer_record *record;
 	s64 cutoff;
 	bool total_status = false;
 	int last_index;
-
-	if (new_status == READ_ONCE(frame_jank))
-		return;
-	if (new_status) {
-		WRITE_ONCE(frame_jank, true);
-		unionpower_sysfs_notify("frame_jank");
-		return;
-	}
 
 	cutoff = cur_time - (JANK_TIMEOUT ? JANK_TIMEOUT :
 			     UNIONPOWER_JANK_TIMEOUT_DEFAULT);
@@ -146,6 +138,19 @@ unionpower_refresh_frame_load_locked(bool new_status, s64 cur_time)
 		WRITE_ONCE(frame_jank, total_status);
 		unionpower_sysfs_notify("frame_jank");
 	}
+}
+
+static void
+unionpower_refresh_frame_load_locked(bool new_status, s64 cur_time)
+{
+	if (new_status == READ_ONCE(frame_jank))
+		return;
+	if (new_status) {
+		WRITE_ONCE(frame_jank, true);
+		unionpower_sysfs_notify("frame_jank");
+		return;
+	}
+	unionpower_recalculate_frame_jank_locked(cur_time);
 }
 
 static void unionpower_update_vsync_locked(struct buffer_record *record,
@@ -636,6 +641,7 @@ static void unionpower_cleanup_records_locked(void)
 {
 	struct buffer_record *record;
 	struct buffer_record *next;
+	bool removed = false;
 
 	list_for_each_entry_safe(record, next, &buffer_record_list, list) {
 		if (unionpower_identity_matches(&record->target) &&
@@ -647,7 +653,10 @@ static void unionpower_cleanup_records_locked(void)
 		unionpower_identity_put(&record->render);
 		kfree(record);
 		unionpower_stat_increment(&unionpower_stats.cleanup_removed);
+		removed = true;
 	}
+	if (removed)
+		unionpower_recalculate_frame_jank_locked(ktime_to_us(ktime_get()));
 }
 
 void unionpower_cleanup_work_fn(struct work_struct *work)
@@ -656,9 +665,8 @@ void unionpower_cleanup_work_fn(struct work_struct *work)
 	mutex_lock(&records_lock);
 	unionpower_cleanup_records_locked();
 	mutex_unlock(&records_lock);
-	if (READ_ONCE(unionpower_active) && queue_buffer_wq &&
-	    !mod_delayed_work(queue_buffer_wq, &cleanup_work, HZ))
-		unionpower_stat_increment(&unionpower_stats.queue_failure);
+	if (READ_ONCE(unionpower_active) && queue_buffer_wq)
+		mod_delayed_work(queue_buffer_wq, &cleanup_work, HZ);
 }
 
 bool unionpower_get_frame_jank(void)

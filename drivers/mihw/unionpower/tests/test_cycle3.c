@@ -17,6 +17,13 @@
 
 static struct pid pids[FIXTURE_COUNT];
 static struct task_struct tasks[FIXTURE_COUNT];
+static int notify_count;
+
+void unionpower_sysfs_notify(const char *attr)
+{
+	assert(!strcmp(attr, "frame_jank"));
+	notify_count++;
+}
 
 static void setup_fixtures(void)
 {
@@ -25,6 +32,8 @@ static void setup_fixtures(void)
 	memset(pids, 0, sizeof(pids));
 	memset(tasks, 0, sizeof(tasks));
 	host_pid_reset();
+	host_set_ktime(0);
+	notify_count = 0;
 	for (i = 0; i < FIXTURE_COUNT; i++) {
 		tasks[i].pid = 1000 + i;
 		tasks[i].refs = 1;
@@ -48,6 +57,82 @@ static void reset_case(void)
 	memset(tasks, 0, sizeof(tasks));
 	current = NULL;
 	host_set_queue_work_synchronous(false);
+	host_set_ktime(0);
+	notify_count = 0;
+}
+
+static int dispatch_event(int index, enum WORK_PUSH_TYPE type,
+			  s64 frame_time_us, s64 frame_interval_us,
+			  u64 frame_id)
+{
+	struct unionpower_identity caller;
+	struct unionpower_identity target;
+
+	caller.pid = get_pid(&pids[index]);
+	caller.start_time = tasks[index].start_time;
+	target.pid = get_pid(&pids[index]);
+	target.start_time = tasks[index].start_time;
+	return unionpower_dispatch(type, &caller, &target, frame_time_us,
+				   frame_interval_us, frame_id);
+}
+
+static int cleanup_recalculates_jank_case(void)
+{
+	struct unionpower_identity identity;
+	struct unionpower_stats stats;
+
+	setup_fixtures();
+	CHECK(unionpower_core_start() == 0);
+	CHECK(dispatch_event(0, NOTIFIER_VSYNC, 1000000, 16600, 1) == 0);
+	host_run_queued_work();
+	CHECK(dispatch_event(0, NOTIFIER_VSYNC, 1016600, 16600, 2) == 0);
+	host_run_queued_work();
+	CHECK(dispatch_event(0, NOTIFIER_QUEUE, 1021000, 0, 1) == 0);
+	host_run_queued_work();
+	CHECK(unionpower_lookup_record(&(struct unionpower_identity) {
+		.pid = &pids[0],
+		.start_time = tasks[0].start_time,
+	}));
+	CHECK(unionpower_get_frame_jank());
+	CHECK(notify_count == 1);
+
+	identity.pid = &pids[0];
+	identity.start_time = tasks[0].start_time;
+	host_set_ktime(1100000000);
+	pids[0].task = NULL;
+	current = NULL;
+	notify_count = 0;
+	unionpower_run_cleanup();
+	CHECK(!unionpower_lookup_record(&identity));
+	CHECK(unionpower_record_count() == 0);
+	CHECK(!unionpower_get_frame_jank());
+	CHECK(notify_count == 1);
+	stats = unionpower_get_stats();
+	CHECK(stats.cleanup_removed == 1);
+	CHECK(pids[0].refs == 1);
+
+	unionpower_run_cleanup();
+	CHECK(!unionpower_get_frame_jank());
+	CHECK(notify_count == 1);
+	stats = unionpower_get_stats();
+	CHECK(stats.cleanup_removed == 1);
+	return 0;
+}
+
+static int cleanup_requeues_after_idle_case(void)
+{
+	struct unionpower_stats stats;
+
+	setup_fixtures();
+	CHECK(unionpower_core_start() == 0);
+	host_reset_mod_delayed_work_calls();
+	host_set_mod_delayed_work_result(false);
+	unionpower_cleanup_work_fn(NULL);
+	stats = unionpower_get_stats();
+	CHECK(stats.queue_failure == 0);
+	CHECK(host_mod_delayed_work_count() == 1);
+	CHECK(host_last_delayed_work_delay() == HZ);
+	return 0;
 }
 
 static int synchronous_queue_case(void)
@@ -214,6 +299,10 @@ static int starttime_reuse_case(void)
 
 static int run_case(void)
 {
+	CHECK(cleanup_recalculates_jank_case() == 0);
+	reset_case();
+	CHECK(cleanup_requeues_after_idle_case() == 0);
+	reset_case();
 	CHECK(synchronous_queue_case() == 0);
 	reset_case();
 	CHECK(pending_limit_case() == 0);

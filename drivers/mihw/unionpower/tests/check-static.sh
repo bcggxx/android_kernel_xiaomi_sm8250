@@ -43,6 +43,12 @@ check "pending reserved before queue_work" \
 	sh -c "reserve=\$(grep -n -m1 'pending_work_count++;' '$dir/unionpower_core.c' | cut -d: -f1); queue=\$(grep -n -m1 '!queue_work(queue_buffer_wq' '$dir/unionpower_core.c' | cut -d: -f1); test \"\$reserve\" -lt \"\$queue\""
 check "one-second cleanup" \
 	grep -q '&cleanup_work, HZ' "$dir/unionpower_core.c"
+check "cleanup recalculates after record removal" \
+	sh -c "sed -n '/static void unionpower_cleanup_records_locked/,/^}/p' '$dir/unionpower_core.c' | grep -q 'unionpower_recalculate_frame_jank_locked(ktime_to_us(ktime_get()))'"
+check "cleanup requeue ignores mod_delayed_work result" \
+	sh -c "sed -n '/void unionpower_cleanup_work_fn/,/^}/p' '$dir/unionpower_core.c' | grep -q 'mod_delayed_work(queue_buffer_wq, &cleanup_work, HZ);'"
+check "cleanup requeue is not a queue failure" \
+	sh -c "! sed -n '/void unionpower_cleanup_work_fn/,/^}/p' '$dir/unionpower_core.c' | grep -q 'queue_failure'"
 check "writer pointer cleared on stop" \
 	grep -q 'WRITE_ONCE(unionpower_writer, NULL)' "$dir/unionpower_core.c"
 check "workqueue destroyed last" \

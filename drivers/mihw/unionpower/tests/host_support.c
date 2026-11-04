@@ -26,6 +26,21 @@ struct host_work_entry {
 static struct host_pid_registry pid_registry;
 static struct host_work_entry *queued_work;
 static bool queue_work_synchronous;
+static ktime_t host_now;
+static bool mod_delayed_work_result;
+static int mod_delayed_work_calls;
+static unsigned long last_delayed_work_delay;
+
+ktime_t host_ktime_get(void)
+{
+	return host_now;
+}
+
+void host_set_ktime(ktime_t now)
+{
+	assert(now >= 0);
+	host_now = now;
+}
 
 struct pid *host_current_pid(void)
 {
@@ -137,7 +152,12 @@ bool queue_delayed_work(struct workqueue_struct *wq,
 bool mod_delayed_work(struct workqueue_struct *wq,
 		      struct delayed_work *dwork, unsigned long delay)
 {
-	return queue_delayed_work(wq, dwork, delay);
+	mod_delayed_work_calls++;
+	last_delayed_work_delay = delay;
+	if (!wq || !wq->host_valid)
+		return false;
+	dwork->host_delayed_pending = true;
+	return mod_delayed_work_result;
 }
 
 bool cancel_delayed_work_sync(struct delayed_work *dwork)
@@ -146,6 +166,27 @@ bool cancel_delayed_work_sync(struct delayed_work *dwork)
 
 	dwork->host_delayed_pending = false;
 	return was_pending;
+}
+
+void host_reset_mod_delayed_work_calls(void)
+{
+	mod_delayed_work_calls = 0;
+	last_delayed_work_delay = 0;
+}
+
+int host_mod_delayed_work_count(void)
+{
+	return mod_delayed_work_calls;
+}
+
+unsigned long host_last_delayed_work_delay(void)
+{
+	return last_delayed_work_delay;
+}
+
+void host_set_mod_delayed_work_result(bool result)
+{
+	mod_delayed_work_result = result;
 }
 
 int host_pending_work_count(void)

@@ -21,6 +21,7 @@ typedef int32_t s32;
 typedef uint32_t u32;
 typedef int64_t s64;
 typedef uint64_t u64;
+typedef s64 ktime_t;
 typedef unsigned short umode_t;
 
 #define __user
@@ -181,6 +182,10 @@ bool mod_delayed_work(struct workqueue_struct *wq,
 		      struct delayed_work *dwork, unsigned long delay);
 bool cancel_delayed_work_sync(struct delayed_work *dwork);
 void flush_workqueue(struct workqueue_struct *wq);
+void host_reset_mod_delayed_work_calls(void);
+int host_mod_delayed_work_count(void);
+unsigned long host_last_delayed_work_delay(void);
+void host_set_mod_delayed_work_result(bool result);
 void host_run_queued_work(void);
 void host_set_queue_work_synchronous(bool enabled);
 struct workqueue_struct *host_workqueue_alloc(const char *name, int count);
@@ -209,6 +214,13 @@ static inline s64 timespec64_to_ns(const struct timespec64 *ts)
 static inline s64 ktime_to_us(s64 ns)
 {
 	return ns / 1000;
+}
+
+ktime_t host_ktime_get(void);
+void host_set_ktime(ktime_t now);
+static inline ktime_t ktime_get(void)
+{
+	return host_ktime_get();
 }
 
 #define module_param(name, type, permissions)
