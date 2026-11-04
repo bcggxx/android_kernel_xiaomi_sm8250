@@ -67,7 +67,7 @@ static void dlp_put(struct dlp_session *s)
 static struct dlp_session *dlp_detach(void)
 {
 	struct dlp_session *s = rcu_dereference_protected(dlp_active,
-							lockdep_is_held(&dlp_lock));
+			lockdep_is_held(&dlp_lock));
 	RCU_INIT_POINTER(dlp_active, NULL);
 	synchronize_rcu();
 	return s;
@@ -79,20 +79,19 @@ void dlp_collect(struct file *file, u64 offset, u64 length)
 	u64 first, last;
 	unsigned int i, f, work = 0;
 	if (!length || offset > U64_MAX - (length - 1) ||
-					!S_ISREG(file_inode(file)->i_mode))
+			!S_ISREG(file_inode(file)->i_mode))
 		return;
 	first = offset >> PAGE_SHIFT;
 	last = (offset + length - 1) >> PAGE_SHIFT;
 	rcu_read_lock();
 	s = rcu_dereference(dlp_active);
 	if (!s || s->tgid != task_tgid(current) ||
-					ktime_get_boottime_ns() >= s->deadline)
+			ktime_get_boottime_ns() >= s->deadline)
 		goto out;
 	spin_lock_irqsave(&s->lock, flags);
-	/* Each file reference pins its mount and inode: no raw recycled identity. */
+	/* Hook indexes only the referenced file object; freeze merges identities. */
 	for (f = 0; f < s->nr_files; f++)
-		if (file_inode(s->files[f]) == file_inode(file) &&
-						s->files[f]->f_path.mnt == file->f_path.mnt)
+		if (s->files[f] == file)
 			break;
 	if (f == s->nr_files) {
 		if (f == DLP_FILES)
@@ -100,14 +99,14 @@ void dlp_collect(struct file *file, u64 offset, u64 length)
 		s->files[f] = get_file(file);
 		s->nr_files++;
 	}
-	/* Page granularity deduplicates both independent opens and read/PTE hits. */
+	/* Page granularity deduplicates read/PTE hits for this open description. */
 	while (first <= last) {
 		/* Current hooks contribute <=1 page; bound future callers too. */
 		if (work++ == 2)
 			goto full;
 		for (i = 0; i < s->nr_ranges; i++)
 			if (s->ranges[i].file == f && s->ranges[i].first <= first &&
-							s->ranges[i].last >= first)
+			s->ranges[i].last >= first)
 				break;
 		if (i == s->nr_ranges) {
 			if (i == DLP_RANGES || s->pages == DLP_PAGES)
@@ -159,12 +158,34 @@ static int dlp_freeze(struct dlp_session *s)
 {
 	struct dlp_snapshot_header *h;
 	struct dlp_snapshot_range *r;
-	unsigned int i, n = 0;
+	unsigned int i, j, n = 0, old_files = s->nr_files;
+	u32 canonical[DLP_FILES];
+
+	/* Process context, after detach + RCU grace period; references pin identity.
+	 * Do not merge custom mappings just because their host inode matches.
+	 */
+	s->nr_files = 0;
+	for (i = 0; i < old_files; i++) {
+		struct file *file = s->files[i];
+
+		for (j = 0; j < s->nr_files; j++)
+			if (file_inode(s->files[j]) == file_inode(file) &&
+			    s->files[j]->f_mapping == file->f_mapping &&
+			    s->files[j]->f_path.mnt == file->f_path.mnt)
+				break;
+		canonical[i] = j;
+		if (j == s->nr_files)
+			s->files[s->nr_files++] = file;
+		else
+			fput(file);
+	}
+	for (i = 0; i < s->nr_ranges; i++)
+		s->ranges[i].file = canonical[s->ranges[i].file];
 	sort(s->ranges, s->nr_ranges, sizeof(s->ranges[0]), dlp_compare, NULL);
 	for (i = 0; i < s->nr_ranges; i++) {
 		struct dlp_extent *e = &s->ranges[i];
 		if (n && s->ranges[n-1].file == e->file &&
-						s->ranges[n-1].last + 1 >= e->first)
+			s->ranges[n-1].last + 1 >= e->first)
 			s->ranges[n-1].last = max(s->ranges[n-1].last, e->last);
 		else
 			s->ranges[n++] = *e;
@@ -231,13 +252,13 @@ static long dlp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	if (r.op < DLP_ENABLE || r.op > DLP_EXPORT_FILE)
 		return -ENOTTY;
 	if (r.version != 1 || r.size != sizeof(r) || r.reserved ||
-					(r.op != DLP_ENABLE && r.flags) ||
-					(r.op == DLP_ENABLE && r.flags > 1))
+			(r.op != DLP_ENABLE && r.flags) ||
+			(r.op == DLP_ENABLE && r.flags > 1))
 		return -EINVAL;
 	if ((r.op != DLP_BEGIN && (r.binder_fd || r.binder_handle ||
-					r.tid || r.uid || r.lease_ms)) ||
-					(r.op != DLP_EXPORT_FILE && r.index) ||
-					(r.op == DLP_ENABLE && r.cookie))
+			r.tid || r.uid || r.lease_ms)) ||
+			(r.op != DLP_EXPORT_FILE && r.index) ||
+			(r.op == DLP_ENABLE && r.cookie))
 		return -EINVAL;
 		mutex_lock(&dlp_lock);
 	if (r.op == DLP_ENABLE) {
@@ -291,8 +312,8 @@ static long dlp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		}
 		rcu_read_lock();
 		if (!pid_alive(task) || task_pid_nr(task) != r.tid ||
-						!uid_eq(task_uid(task), make_kuid(&init_user_ns, r.uid)) ||
-						(READ_ONCE(task->flags) & PF_EXITING))
+			!uid_eq(task_uid(task), make_kuid(&init_user_ns, r.uid)) ||
+			(READ_ONCE(task->flags) & PF_EXITING))
 			ret = -ESRCH;
 		else
 			s->tgid = get_task_pid(task, PIDTYPE_TGID);
@@ -339,25 +360,49 @@ static long dlp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			refcount_inc(&s->refs);
 			atomic_inc(&dlp_snapshots);
 			ret = anon_inode_getfd("dagu-launch-snapshot", &dlp_snapshot_ops, s,
-										O_RDONLY | O_CLOEXEC);
+			O_RDONLY | O_CLOEXEC);
 			if (ret < 0) {
 				atomic_dec(&dlp_snapshots);
 				dlp_put(s);
 			}
 		} else {
-			struct file *export;
+			struct file *original, *export;
+
 			if (r.index >= s->nr_files) {
 				ret = -EINVAL;
 				goto out;
 			}
-			export = s->files[r.index];
-			/* Never duplicate a writable file description into the consumer. */
-			if ((export->f_flags & O_ACCMODE) != O_RDONLY ||
-							(!(export->f_mode & FMODE_READ) ||
-			 (export->f_mode & FMODE_WRITE))) { ret = -EACCES; goto out; }
+			original = s->files[r.index];
+			if ((original->f_flags & O_ACCMODE) != O_RDONLY ||
+			    !(original->f_mode & FMODE_READ) ||
+			    (original->f_mode & FMODE_WRITE)) {
+				ret = -EACCES;
+				goto out;
+			}
+			ret = inode_permission(file_inode(original), MAY_READ);
+			if (ret)
+				goto out;
+			/* Independent description: never share the app's f_pos/f_flags. */
+			export = dentry_open(&original->f_path, O_RDONLY | O_LARGEFILE,
+			     current_cred());
+			if (IS_ERR(export)) {
+				ret = PTR_ERR(export);
+				goto out;
+			}
+			if (!S_ISREG(file_inode(export)->i_mode) ||
+			    file_inode(export) != file_inode(original) ||
+			    export->f_path.mnt != original->f_path.mnt ||
+			    !(export->f_mode & FMODE_READ) ||
+			    (export->f_mode & FMODE_WRITE)) {
+				fput(export);
+				ret = -ESTALE;
+				goto out;
+			}
 			ret = get_unused_fd_flags(O_CLOEXEC);
 			if (ret >= 0)
-				fd_install(ret, get_file(export));
+				fd_install(ret, export);
+			else
+				fput(export);
 		}
 	} else if (r.op == DLP_STATUS) {
 		ret = s ? 1 : 0;

@@ -33,9 +33,15 @@ page-rounded from the actual copied prefix and actual VMA PTE address; zero
 copies and errors contribute nothing. This is not a full process trace.
 
 There is one active session, at most 128 pinned file identities and 4096
-unique page records. Different opens of the same pinned inode/mount merge;
+unique page records. Hooks index the file object only. At freeze, different
+opens of the same pinned inode/mount/mapping merge;
 no bare dev/ino identity survives a file reference. Unique-page budget is
-32MiB, additionally bounded by the 4096 records (16MiB with 4KiB pages).
+32MiB, additionally bounded by the 4096 per-open records (16MiB with 4KiB
+pages). Independent opens can therefore exhaust the raw budget before the
+freeze-time union reaches32MiB; this is conservative truncation, not silent
+loss presented as complete. Mutable-file/version acceptance belongs to the
+consumer validation/persistence slice; pinning an inode alone proves no
+content immutability.
 Preallocation plus maximum wire image is below 4MiB. Slot exhaustion preserves
 a prefix, sets TRUNCATED and saturating dropped-event count. A truncated
 snapshot must never be published as successful training. Spinlock work is
@@ -49,9 +55,11 @@ there is no post-install user copy. Bytes are little endian: 32-byte header
 (magic 0x31504c44, version, byte size, file count, range count, flags, page
 shift, dropped events), then 24-byte records (u32 index/reserved, u64 byte
 offset/length). Reads use immutable bytes and bounded offsets. EXPORT_FILE
-returns a readonly original file fd by index only if the original open was
+reopens a readonly independent file description by index only if the original open was
 O_RDONLY with FMODE_READ. Writable descriptions are rejected with EACCES;
-the helper skips them. Export never upgrades file access. Snapshot close drops
+the helper skips them. Export checks read permission and revalidates pinned
+inode/mount identity and regular/read-only mode. Independent descriptions avoid
+sharing the app f_pos/f_flags. Export never upgrades file access. Snapshot close drops
 its reference; controller close cannot leave dangling snapshot memory.
 Disable revokes snapshot reads with ESHUTDOWN (already completed reads cannot
 be recalled). A user-held snapshot blocks the next BEGIN and still charges
