@@ -5,7 +5,8 @@ service mi_mem_engine /system/bin/mi_mem_engine_helper
     group root
     capabilities SYS_ADMIN
     disabled
-    socket mi_mem_engine seqpacket 0600 system system u:object_r:mi_mem_engine_socket:s0
+    # Endpoint SID defaults to service domain; file_contexts labels the pathname.
+    socket mi_mem_engine seqpacket 0600 system system
 
 on property:sys.mi_mem_engine.enabled=1
     start mi_mem_engine
