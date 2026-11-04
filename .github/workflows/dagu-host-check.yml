@@ -9,6 +9,7 @@ on:
       - mm/mi_mtmr.c
       - mm/mi_mtmr.h
       - mm/Kconfig
+      - mm/dagu_launch_profile.c
       - mm/kshrink_slabd.c
       - mm/mi_rmap_efficiency.c
       - mm/mi_rmap_efficiency.h

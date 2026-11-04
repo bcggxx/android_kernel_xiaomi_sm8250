@@ -77,3 +77,9 @@ collection slice. Package-bound persistence and launch replay remain ticket08.
 Host parsing checks and object compilation cannot prove Android integration,
 PTE concurrency, RCU behavior, cold-cache I/O, or performance. No image or
 runtime enablement is implied by building these sources.
+
+FINISH revalidates the lease and task after detaching collection and waiting
+for readers. An expired or exited session is dropped with ESRCH even if the
+50 ms expiry worker has not run. ABORT still drops an invalid session without
+publishing a snapshot. A successful validity check is the commit boundary;
+this does not promise that the task remains alive after that point.
