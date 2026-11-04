@@ -238,4 +238,5 @@ source "drivers/energy_model/Kconfig"
 source "drivers/mihw/Kconfig"
 
 source "drivers/rekernel/Kconfig"
+source "drivers/kernel_version/Kconfig"
 endmenu
