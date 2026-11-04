@@ -127,20 +127,26 @@ full:
 out:
 	rcu_read_unlock();
 }
+static bool dlp_session_valid(struct dlp_session *s)
+{
+	struct task_struct *task;
+	bool alive;
+
+	rcu_read_lock();
+	task = pid_task(s->tgid, PIDTYPE_TGID);
+	alive = task && !(READ_ONCE(task->flags) & PF_EXITING);
+	rcu_read_unlock();
+	return alive && ktime_get_boottime_ns() < s->deadline;
+}
+
 static void dlp_expire(struct work_struct *work)
 {
 	struct dlp_session *s;
-	bool alive;
+
 	mutex_lock(&dlp_lock);
 	s = rcu_dereference_protected(dlp_active, lockdep_is_held(&dlp_lock));
 	if (s) {
-		rcu_read_lock();
-		{
-			struct task_struct *t = pid_task(s->tgid, PIDTYPE_TGID);
-			alive = t && !(READ_ONCE(t->flags) & PF_EXITING);
-		}
-		rcu_read_unlock();
-		if (!alive || ktime_get_boottime_ns() >= s->deadline)
+		if (!dlp_session_valid(s))
 			dlp_put(dlp_detach());
 		else
 			mod_delayed_work(system_wq, &dlp_expiry, msecs_to_jiffies(50));
@@ -207,6 +213,34 @@ static int dlp_freeze(struct dlp_session *s)
 	}
 	return 0;
 }
+/* Caller holds dlp_lock. Detach before checking validity so the grace period
+ * cannot turn an expired session into a successful frozen profile.
+ */
+static int dlp_complete(u64 cookie, bool success)
+{
+	struct dlp_session *s;
+	int ret;
+
+	s = rcu_dereference_protected(dlp_active, lockdep_is_held(&dlp_lock));
+	if (!s || s->cookie != cookie)
+		return -ESRCH;
+	s = dlp_detach();
+	if (!success) {
+		dlp_put(s);
+		return 0;
+	}
+	if (!dlp_session_valid(s)) {
+		dlp_put(s);
+		return -ESRCH;
+	}
+	ret = dlp_freeze(s);
+	if (ret)
+		dlp_put(s);
+	else
+		dlp_frozen = s;
+	return ret;
+}
+
 static ssize_t dlp_read(struct file *file, char __user *buf, size_t n, loff_t *pos)
 {
 	struct dlp_session *s = file->private_data;
@@ -260,7 +294,7 @@ static long dlp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			(r.op != DLP_EXPORT_FILE && r.index) ||
 			(r.op == DLP_ENABLE && r.cookie))
 		return -EINVAL;
-		mutex_lock(&dlp_lock);
+	mutex_lock(&dlp_lock);
 	if (r.op == DLP_ENABLE) {
 		dlp_clear();
 		dlp_enabled = r.flags;
@@ -332,20 +366,7 @@ static long dlp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		rcu_assign_pointer(dlp_active, s);
 		mod_delayed_work(system_wq, &dlp_expiry, msecs_to_jiffies(50));
 	} else if (r.op == DLP_FINISH || r.op == DLP_ABORT) {
-		if (!s || s->cookie != r.cookie) {
-			ret = -ESRCH;
-			goto out;
-		}
-		s = dlp_detach();
-		if (r.op == DLP_ABORT)
-			dlp_put(s);
-		else {
-			ret = dlp_freeze(s);
-			if (ret)
-				dlp_put(s);
-			else
-				dlp_frozen = s;
-		}
+		ret = dlp_complete(r.cookie, r.op == DLP_FINISH);
 	} else if (r.op == DLP_SNAPSHOT || r.op == DLP_EXPORT_FILE) {
 		s = dlp_frozen;
 		if (!s || s->cookie != r.cookie) {
