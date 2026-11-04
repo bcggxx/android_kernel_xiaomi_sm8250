@@ -4965,7 +4965,9 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order, int preferred_nid,
 					ac.preferred_zoneref->zone);
 		/* Already prepared: repeat only caller initialization. */
 		if (page && want_init_on_alloc(alloc_mask))
-			kernel_init_free_pages(page, 1);
+			kernel_init_free_pages(page, 1 << order);
+		if (page && order && (alloc_mask & __GFP_COMP))
+			prep_compound_page(page, order);
 	}
 
 out:
