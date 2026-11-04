@@ -11,6 +11,7 @@
 #include <linux/init.h>
 #include <linux/kthread.h>
 #include <linux/memcontrol.h>
+#include <linux/mmzone.h>
 #include <linux/moduleparam.h>
 #include <linux/sched.h>
 #include <linux/spinlock.h>
@@ -34,6 +35,7 @@ static struct slabd_request slabd_request;
 static bool slabd_pending;
 static bool slabd_busy;
 static bool slabd_enabled __read_mostly;
+static bool slabd_global_scan __read_mostly;
 
 static bool slabd_is_idle(void)
 {
@@ -60,6 +62,9 @@ static int slabd_set_enabled(const char *val, const struct kernel_param *kp)
 	/* Parameter writes serialize here via the module parameter mutex. */
 	spin_lock_irqsave(&slabd_lock, flags);
 	WRITE_ONCE(slabd_enabled, enabled);
+	/* Global requests hold no CSS pin and may be cancelled before take. */
+	if (!enabled && slabd_global_scan)
+		WRITE_ONCE(slabd_pending, false);
 	spin_unlock_irqrestore(&slabd_lock, flags);
 
 	/* The worker never takes the parameter mutex, including during reclaim. */
@@ -76,8 +81,52 @@ static const struct kernel_param_ops slabd_enabled_ops = {
 module_param_cb(enabled, &slabd_enabled_ops, &slabd_enabled, 0644);
 MODULE_PARM_DESC(enabled, "Allow background slab reclaim requests");
 
+/* Mode changes cannot reinterpret a pending or running request. */
+static int slabd_set_global_scan(const char *val, const struct kernel_param *kp)
+{
+	bool global_scan;
+	struct kernel_param parsed = { .arg = &global_scan };
+	unsigned long flags;
+	int ret;
+
+	ret = param_set_bool(val, &parsed);
+	if (ret)
+		return ret;
+	spin_lock_irqsave(&slabd_lock, flags);
+	if (slabd_enabled || slabd_pending || slabd_busy)
+		ret = -EBUSY;
+	else
+		WRITE_ONCE(slabd_global_scan, global_scan);
+	spin_unlock_irqrestore(&slabd_lock, flags);
+	return ret;
+}
+
+static const struct kernel_param_ops slabd_global_scan_ops = {
+	.set = slabd_set_global_scan,
+	.get = param_get_bool,
+};
+module_param_cb(global_scan, &slabd_global_scan_ops, &slabd_global_scan, 0644);
+MODULE_PARM_DESC(global_scan,
+		 "Scan all memcgs; change only while disabled and idle");
+
+/* Below a managed zone's minimum watermark, let synchronous reclaim work. */
+static bool slabd_under_pressure(int nid)
+{
+	struct zone *zone;
+
+	for (zone = NODE_DATA(nid)->node_zones;
+	     zone < NODE_DATA(nid)->node_zones + MAX_NR_ZONES; zone++) {
+		if (managed_zone(zone) &&
+		    !zone_watermark_ok_safe(zone, 0, min_wmark_pages(zone),
+					   zone_idx(zone)))
+			return true;
+	}
+	return false;
+}
+
 bool wakeup_kshrink_slabd(gfp_t gfp_mask, int nid,
-			struct mem_cgroup *memcg, int priority)
+			struct mem_cgroup *memcg, int priority,
+			bool global_reclaim)
 {
 	unsigned long flags;
 
@@ -88,10 +137,14 @@ bool wakeup_kshrink_slabd(gfp_t gfp_mask, int nid,
 	spin_lock_irqsave(&slabd_lock, flags);
 	if (!slabd_enabled || !slabd_task || slabd_pending || slabd_busy)
 		goto synchronous;
-	if (memcg && !css_tryget_online(&memcg->css))
+	if (slabd_global_scan &&
+	    (!global_reclaim || (memcg && memcg != root_mem_cgroup) ||
+	     slabd_under_pressure(nid)))
+		goto synchronous;
+	if (!slabd_global_scan && memcg && !css_tryget_online(&memcg->css))
 		goto synchronous;
 
-	slabd_request.memcg = memcg;
+	slabd_request.memcg = slabd_global_scan ? NULL : memcg;
 	slabd_request.gfp_mask = gfp_mask;
 	slabd_request.nid = nid;
 	slabd_request.priority = priority;
@@ -103,6 +156,49 @@ bool wakeup_kshrink_slabd(gfp_t gfp_mask, int nid,
 synchronous:
 	spin_unlock_irqrestore(&slabd_lock, flags);
 	return false;
+}
+
+static bool slabd_take_request(struct slabd_request *request)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&slabd_lock, flags);
+	/* Disable may have cancelled global pending after the wait succeeded. */
+	if (!slabd_pending) {
+		spin_unlock_irqrestore(&slabd_lock, flags);
+		return false;
+	}
+	*request = slabd_request;
+	WRITE_ONCE(slabd_pending, false);
+	WRITE_ONCE(slabd_busy, true);
+	spin_unlock_irqrestore(&slabd_lock, flags);
+	return true;
+}
+
+static void slabd_scan_global(struct slabd_request *request)
+{
+	struct mem_cgroup *memcg = NULL;
+
+	/* Runtime-disabled MEMCG has no iterator entries, but global slabs exist. */
+	if (mem_cgroup_disabled()) {
+		if (READ_ONCE(slabd_enabled) && !kthread_should_stop() &&
+		    !slabd_under_pressure(request->nid))
+			shrink_slab(request->gfp_mask, request->nid, NULL,
+				    request->priority);
+		return;
+	}
+
+	/* iter owns prev: passing it back releases it, including at final NULL. */
+	while ((memcg = mem_cgroup_iter(NULL, memcg, NULL))) {
+		if (!READ_ONCE(slabd_enabled) || kthread_should_stop() ||
+		    slabd_under_pressure(request->nid)) {
+			mem_cgroup_iter_break(NULL, memcg);
+			break;
+		}
+		shrink_slab(request->gfp_mask, request->nid, memcg,
+			    request->priority);
+		cond_resched();
+	}
 }
 
 static int kshrink_slabd(void *unused)
@@ -122,16 +218,17 @@ static int kshrink_slabd(void *unused)
 		if (kthread_should_stop())
 			break;
 
-		spin_lock_irqsave(&slabd_lock, flags);
-		request = slabd_request;
-		WRITE_ONCE(slabd_pending, false);
-		WRITE_ONCE(slabd_busy, true);
-		spin_unlock_irqrestore(&slabd_lock, flags);
+		if (!slabd_take_request(&request))
+			continue;
 
 		reclaim_state.reclaimed_slab = 0;
-		shrink_slab(request.gfp_mask, request.nid, request.memcg,
-			    request.priority);
-		mem_cgroup_put(request.memcg);
+		if (READ_ONCE(slabd_global_scan))
+			slabd_scan_global(&request);
+		else {
+			shrink_slab(request.gfp_mask, request.nid, request.memcg,
+				    request.priority);
+			mem_cgroup_put(request.memcg);
+		}
 
 		spin_lock_irqsave(&slabd_lock, flags);
 		WRITE_ONCE(slabd_busy, false);

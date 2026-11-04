@@ -1,5 +1,5 @@
 Dagu host regression tests
-============
+=====
 
 These tests compile functions extracted from the kernel sources against small
 userspace substitutes. They need Python 3, a native C compiler with sanitizer
@@ -80,3 +80,9 @@ PI and excluding negative DL, GFP/context/worker/zone gates, pool-empty fallback
 and page/vmstat ownership transfer. Kernel list, lock and task adapters are
 limited host substitutes. Real direct-reclaim hook, cpuset/nodemask race, zero
 and memcg, shrinker/refill and stop concurrency require device acceptance.
+
+The global slab check extracts admission, mode control, pending take and
+serial scan functions. Its iterator and watermarks are substitutes: it checks
+control and reference protocol only, not real memcg offline, shrinkers, RCU,
+freezer or pressure behavior. Real kswapd/multi-memcg/disable validation remains
+required before claiming functional acceptance.

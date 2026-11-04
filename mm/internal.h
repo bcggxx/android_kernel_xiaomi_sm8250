@@ -633,10 +633,12 @@ unsigned long shrink_slab(gfp_t gfp_mask, int nid,
 			  struct mem_cgroup *memcg, int priority);
 #ifdef CONFIG_KSHRINK_SLABD
 bool wakeup_kshrink_slabd(gfp_t gfp_mask, int nid,
-			struct mem_cgroup *memcg, int priority);
+			struct mem_cgroup *memcg, int priority,
+			bool global_reclaim);
 #else
 static inline bool wakeup_kshrink_slabd(gfp_t gfp_mask, int nid,
-				      struct mem_cgroup *memcg, int priority)
+				      struct mem_cgroup *memcg, int priority,
+				      bool global_reclaim)
 {
 	return false;
 }

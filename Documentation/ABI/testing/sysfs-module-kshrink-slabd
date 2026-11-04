@@ -3,7 +3,9 @@ Date:		October 2026
 Description:	Runtime boolean switch for CONFIG_KSHRINK_SLABD, when built
 		in; defaults to false. Disabling rejects new asynchronous
 		requests under the request lock and waits for pending/running
-		work and its memcg reference release. A successful write of
+		work and its memcg reference release. Global scan cancels
+		pending work and interrupts running iteration at the next
+		group boundary; an active shrinker must return first. A successful write of
 		false guarantees idle background reclaim on return. The wait
 		is freezable and may be interrupted by a signal: on error,
 		admission stays disabled but drain is not guaranteed; write
@@ -12,3 +14,14 @@ Description:	Runtime boolean switch for CONFIG_KSHRINK_SLABD, when built
 		is promised. Direct reclaim, drop_caches, severe pressure and
 		a busy/unavailable worker remain synchronous. The Kconfig
 		option is also off in the default configuration.
+
+What:		/sys/module/kshrink_slabd/parameters/global_scan
+Date:		November 2026
+Description:	Boolean mode, default false (single-request mode). True
+		selects one serial all-memcg scan on an accepted root/global
+		kswapd request. Only the accepted call skips synchronous
+		reclaim; nonroot, busy, direct and severe-pressure calls do
+		not. Change requires admission disabled and pending/running
+		work drained; otherwise EBUSY, including repeated writes.
+		Invalid input leaves mode unchanged. Shares the existing
+		worker and slot. No periodic timer or launch protocol.

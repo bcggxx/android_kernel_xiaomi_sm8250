@@ -1010,6 +1010,7 @@ config MI_FAULT_AROUND
 
 config MI_RECLAIM_POOL
 	bool "Prepared order-zero reserve for effective RT allocations"
+	depends on ARM64 && ARM64_4K_PAGES && SYSFS && !MEMORY_HOTPLUG
 	default n
 	help
 	  Independent C22 refill reserve, disabled at runtime by default.
