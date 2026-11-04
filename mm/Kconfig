@@ -990,13 +990,13 @@ config MI_ASYNC_RECLAIM
 	  See Documentation/vm/mi-async-reclaim.rst.
 
 config MI_MEMPOOL
-	bool "Experimental order-zero allocator reserve"
+	bool "Experimental allocator reserve for orders 0, 1 and 4"
 	depends on ARM64 && ARM64_4K_PAGES && SYSFS && !MEMORY_HOTPLUG
 	default n
 	help
-	  A runtime-disabled 4 MiB NORMAL-zone reserve for eligible failed
-	  order-zero allocations. Pressure releases stored pages. Experimental;
-	  requires target-device memory-pressure and concurrency validation.
+	  A runtime-disabled 6 MiB NORMAL-zone reserve for eligible failed
+	  order-zero, order-one and order-four allocations. Pressure releases
+	  stored pages. Experimental; requires target-device memory-pressure and concurrency validation.
 
 config MI_FAULT_AROUND
 	bool "UID fault-around selection (experimental)"
