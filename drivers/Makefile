@@ -195,3 +195,5 @@ obj-$(CONFIG_GNSS)		+= gnss/
 obj-$(CONFIG_SENSORS_SSC)	+= sensors/
 obj-$(CONFIG_MIHW)     	+= mihw/
 obj-$(CONFIG_REKERNEL) += rekernel/
+
+obj-$(CONFIG_CHIRUNO_KERNEL_VERSION) += kernel_version/

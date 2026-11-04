@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0
+config CHIRUNO_KERNEL_VERSION
+	tristate "Read-only target kernel release metadata"
+	depends on PROC_FS
+	default n
+	help
+	  Expose this build's UTS_RELEASE through /proc/chiruno_kernel_version.
+	  This is identity metadata, not a ROM compatibility or performance flag.
+	  If built as a module, its name is chiruno_kernel_version.
