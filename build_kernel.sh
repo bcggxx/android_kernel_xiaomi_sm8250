@@ -65,6 +65,11 @@ DAGU_FAULT_OPTIONS=(DEBUG_KERNEL DEBUG_FS FAULT_INJECTION FAILSLAB
     FAULT_INJECTION_STACKTRACE_FILTER)
 DAGU_FAULT_DISABLED=(FAIL_IO_TIMEOUT FAIL_FUTEX FAIL_FUNCTION
     FAIL_MMC_REQUEST UFS_FAULT_INJECTION)
+DAGU_CI_FEATURE_CONFIGS=(MIHW BINDER_PRIO KSHRINK_SLABD
+    MI_RMAP_EFFICIENCY READAHEAD_LIMIT MI_MTMR MI_ASYNC_RECLAIM
+    MOON_MMAP_OPT MI_MEMPOOL MI_FAULT_AROUND MI_RECLAIM_POOL
+    MI_MEM_ENGINE DAGU_LAUNCH_PROFILE MI_SW_SYNC SYNC_FILE
+    CHIRUNO_KERNEL_VERSION MI_UNION_POWER)
 
 # ==========================================
 # Configuration & Environment
@@ -479,6 +484,11 @@ build_target() {
         else
             scripts/config --file "${OUT_DIR}/.config" -d FAULT_INJECTION
         fi
+
+        echo "[*] Enabling all implemented dagu feature code for CI coverage..."
+        for feature_option in "${DAGU_CI_FEATURE_CONFIGS[@]}"; do
+            scripts/config --file "${OUT_DIR}/.config" -e "$feature_option"
+        done
     fi
 
     # We always need to re-evaluate dependencies because BBG is injected unconditionally
@@ -492,6 +502,13 @@ build_target() {
     fi
 
     if [ "$DEVICE_NAME" = "dagu" ]; then
+        for feature_option in "${DAGU_CI_FEATURE_CONFIGS[@]}"; do
+            grep -qx "CONFIG_${feature_option}=y" "${OUT_DIR}/.config" || {
+                echo "[!] CI feature config missing: ${feature_option}"
+                exit 1
+            }
+        done
+
         if [ "$ENABLE_READAHEAD_FAULTS" -eq 1 ]; then
             for fault_option in "${DAGU_FAULT_OPTIONS[@]}"; do
                 grep -qx "CONFIG_${fault_option}=y" "${OUT_DIR}/.config" || {
