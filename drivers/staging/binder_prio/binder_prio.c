@@ -19,7 +19,7 @@
 static bool extra_main_threads;
 module_param(extra_main_threads, bool, 0644);
 MODULE_PARM_DESC(extra_main_threads,
-		"Allow rsonalassistant and .globallauncher main-thread transactions");
+		 "Allow rsonalassistant and .globallauncher main-thread transactions");
 
 static bool binder_prio_is_rt(unsigned int policy)
 {
@@ -95,8 +95,12 @@ static void binder_prio_set_priority(void *unused, struct binder_transaction *t,
 
 	if (!binder_prio_is_graphics_transaction(t, task))
 		return;
-	/* Preserve a stronger/equal RT priority and Binder's receiver limits. */
-	if (READ_ONCE(task->normal_prio) <= MAX_RT_PRIO - 2 ||
+	/*
+	 * The core has already inherited the sender policy by the time this
+	 * hook runs. Preserve a receiver that was RT before the transaction,
+	 * but allow a normal receiver inheriting FIFO99 to be raised to FIFO1.
+	 */
+	if (binder_prio_is_rt(READ_ONCE(t->saved_priority.sched_policy)) ||
 	    !binder_prio_receiver_allows_rt(task))
 		return;
 
