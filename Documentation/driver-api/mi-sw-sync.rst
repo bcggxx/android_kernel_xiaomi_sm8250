@@ -29,6 +29,7 @@ duplicated by the device; standard file-descriptor rules apply.
 
 The device follows the Xiaomi software-sync ABI and intentionally does not
 depend on debugfs.  The implementation does not add debugfs nodes or expose
-timeline state.  Its DAC mode is ``0666`` to match the device-tree setup used
-by Xiaomi display userspace; SELinux policy still controls which domains may
-open it.
+timeline state.  The kernel miscdevice requests mode ``0666``.  Android
+`ueventd` applies the product's final device-node policy; the tested dagu
+image exposes ``0600``, so a non-root consumer also requires a matching
+ueventd ownership/mode rule and SELinux allowance.
