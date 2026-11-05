@@ -61,6 +61,7 @@
 #include "mi_rmap_efficiency.h"
 #include "mi_async_reclaim.h"
 #include "mi_mtmr.h"
+#include "moon_mmap_opt.h"
 #include <linux/sizes.h>
 
 #ifdef CONFIG_RTMM
@@ -3473,6 +3474,16 @@ static bool throttle_direct_reclaim(gfp_t gfp_mask, struct zonelist *zonelist,
 	 */
 	if (fatal_signal_pending(current))
 		goto out;
+
+#ifdef CONFIG_MOON_MMAP_OPT
+	/*
+	 * The recovered Moon policy gives real-time tasks a bounded bypass of
+	 * the pfmemalloc wait. Direct reclaim itself and all normal eligibility
+	 * checks remain unchanged.
+	 */
+	if (moon_mmap_opt_rt_bypass(current))
+		goto out;
+#endif
 
 	/*
 	 * Check if the pfmemalloc reserves are ok by finding the first node

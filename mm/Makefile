@@ -118,6 +118,7 @@ obj-$(CONFIG_MI_RMAP_EFFICIENCY) += mi_rmap_efficiency.o
 obj-$(CONFIG_READAHEAD_LIMIT) += readahead_limit.o
 
 obj-$(CONFIG_MI_ASYNC_RECLAIM) += mi_async_reclaim.o
+obj-$(CONFIG_MOON_MMAP_OPT) += moon_mmap_opt.o
 obj-y += allocator_reserve.o
 obj-$(CONFIG_MI_MEMPOOL) += mi_mempool.o
 
