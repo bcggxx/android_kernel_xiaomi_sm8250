@@ -29,6 +29,23 @@ config SW_SYNC
 	  WARNING: improper use of this can result in deadlocking kernel
 	  drivers from userspace. Intended for test and debug only.
 
+config MI_SW_SYNC
+	tristate "Xiaomi software sync device"
+	depends on SYNC_FILE
+	default n
+	help
+	  Create a /dev/mi_sw_sync character device that exposes the
+	  Xiaomi software-sync UAPI.  Each open creates an independent
+	  timeline.  Userspace can create fences on that timeline and
+	  advance it to signal pending fences.
+
+	  This interface is used by Xiaomi display userspace.  It provides
+	  the same create-fence and increment operations as the software
+	  sync test framework without requiring debugfs.
+
+	  WARNING: enabling this interface lets userspace create software
+	  fences.  Say N unless the matching display userspace is present.
+
 config DEBUG_DMA_BUF_REF
 	bool "DEBUG Reference Count"
 	depends on STACKDEPOT
