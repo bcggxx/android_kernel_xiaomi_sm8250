@@ -11,6 +11,7 @@ enum mi_rmap_control {
 };
 
 #ifdef CONFIG_MI_RMAP_EFFICIENCY
+bool mi_rmap_should_bypass(struct page *page, int priority);
 enum mi_rmap_control mi_rmap_check(struct page *page, unsigned long nr_scanned,
 				 int priority, unsigned long *nr_protected);
 #else

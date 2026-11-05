@@ -114,3 +114,20 @@ obj-$(CONFIG_PROCESS_RECLAIM)	+= process_reclaim.o
 
 obj-$(CONFIG_KSHRINK_SLABD) += kshrink_slabd.o
 obj-$(CONFIG_MI_RMAP_EFFICIENCY) += mi_rmap_efficiency.o
+
+obj-$(CONFIG_READAHEAD_LIMIT) += readahead_limit.o
+
+obj-$(CONFIG_MI_ASYNC_RECLAIM) += mi_async_reclaim.o
+obj-$(CONFIG_MOON_MMAP_OPT) += moon_mmap_opt.o
+obj-y += allocator_reserve.o
+obj-$(CONFIG_MI_MEMPOOL) += mi_mempool.o
+
+
+obj-$(CONFIG_MI_FAULT_AROUND) += mi_fault_around.o
+obj-$(CONFIG_MI_RECLAIM_POOL) += mi_reclaim_pool.o
+
+obj-$(CONFIG_MI_MTMR) += mi_mtmr.o
+
+obj-$(CONFIG_MI_MEM_ENGINE) += mi_mem_engine.o
+
+obj-$(CONFIG_DAGU_LAUNCH_PROFILE) += dagu_launch_profile.o

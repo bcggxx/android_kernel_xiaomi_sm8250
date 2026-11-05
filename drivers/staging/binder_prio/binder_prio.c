@@ -15,6 +15,12 @@
 
 #include "../../android/binder_internal.h"
 
+/* Extra official comm rules are opt-in, independently of the legacy list. */
+static bool extra_main_threads;
+module_param(extra_main_threads, bool, 0644);
+MODULE_PARM_DESC(extra_main_threads,
+		 "Allow rsonalassistant and .globallauncher main-thread transactions");
+
 static bool binder_prio_is_rt(unsigned int policy)
 {
 	return policy == SCHED_FIFO || policy == SCHED_RR;
@@ -44,7 +50,9 @@ static bool binder_prio_is_graphics_sender(struct task_struct *sender,
 		return false;
 
 	return !strcmp(name, "com.miui.home") ||
-		!strcmp(name, "ndroid.systemui") || !strcmp(name, "surfaceflinger");
+		!strcmp(name, "ndroid.systemui") || !strcmp(name, "surfaceflinger") ||
+		(READ_ONCE(extra_main_threads) &&
+		 (!strcmp(name, "rsonalassistant") || !strcmp(name, ".globallauncher")));
 }
 
 static bool binder_prio_is_graphics_transaction(struct binder_transaction *t,
@@ -53,7 +61,9 @@ static bool binder_prio_is_graphics_transaction(struct binder_transaction *t,
 	struct task_struct *sender = NULL;
 	bool graphics = false;
 
-	if (!t || !receiver || (t->flags & TF_ONE_WAY))
+	if (!t || !receiver || (t->flags & TF_ONE_WAY) ||
+	    !t->buffer || !t->buffer->target_node ||
+	    !t->buffer->target_node->inherit_rt)
 		return false;
 
 	/* t->from can disappear concurrently with sender thread teardown. */
@@ -85,8 +95,12 @@ static void binder_prio_set_priority(void *unused, struct binder_transaction *t,
 
 	if (!binder_prio_is_graphics_transaction(t, task))
 		return;
-	/* Preserve a stronger/equal RT priority and Binder's receiver limits. */
-	if (READ_ONCE(task->normal_prio) <= MAX_RT_PRIO - 2 ||
+	/*
+	 * The core has already inherited the sender policy by the time this
+	 * hook runs. Preserve a receiver that was RT before the transaction,
+	 * but allow a normal receiver inheriting FIFO99 to be raised to FIFO1.
+	 */
+	if (binder_prio_is_rt(READ_ONCE(t->saved_priority.sched_policy)) ||
 	    !binder_prio_receiver_allows_rt(task))
 		return;
 

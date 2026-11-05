@@ -15,6 +15,7 @@ various features of the Linux memory management
 
    kshrink_slabd
    mi_rmap_efficiency
+   moon-mmap-opt
    swap_numa
    zswap
 
@@ -43,6 +44,7 @@ descriptions of data structures and algorithms.
    page_migration
    page_frags
    page_owner
+   readahead-page-granularity
    remap_file_pages
    slub
    split_page_table_lock

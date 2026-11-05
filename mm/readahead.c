@@ -21,8 +21,50 @@
 #include <linux/mm_inline.h>
 #include <linux/blk-cgroup.h>
 #include <linux/fadvise.h>
+#include <linux/cgroup.h>
+#include <linux/ktime.h>
+#include <trace/events/filemap.h>
 
 #include "internal.h"
+#include "mi_mtmr.h"
+
+/* Observation only: no sampling on the disabled tracepoint path. */
+static void readahead_trace_window(struct address_space *mapping, pgoff_t offset,
+		unsigned long nr_pages, unsigned long lookahead_pages)
+{
+	u64 cpuset_id = 0, start_ns, available_ns;
+	int cpuset_root = -1;
+	unsigned int cpuset_state = 0;
+	long available_pages;
+#ifdef CONFIG_CPUSETS
+	struct cgroup_subsys_state *css;
+#endif
+
+	if (!trace_filemap_readahead_window_enabled())
+		return;
+
+#ifdef CONFIG_CPUSETS
+	rcu_read_lock();
+	css = task_css(current, cpuset_cgrp_id);
+	if (css) {
+		cpuset_state = 2;
+		if ((READ_ONCE(css->flags) & CSS_ONLINE) &&
+		    !css_is_dying(css)) {
+			cpuset_id = cgroup_id(css->cgroup);
+			cpuset_root = css->cgroup->root->hierarchy_id;
+			cpuset_state = 1;
+		}
+	} else {
+		cpuset_state = 3;
+	}
+	rcu_read_unlock();
+#endif
+	start_ns = ktime_get_ns();
+	available_pages = si_mem_available();
+	available_ns = ktime_get_ns() - start_ns;
+	trace_filemap_readahead_window(mapping, offset, nr_pages, lookahead_pages,
+		cpuset_id, cpuset_root, cpuset_state, available_pages, available_ns);
+}
 
 /*
  * Initialise a struct file's readahead state.  Assumes that the caller has
@@ -149,10 +191,11 @@ out:
  *
  * Returns the number of pages requested, or the maximum amount of I/O allowed.
  */
-unsigned int __do_page_cache_readahead(struct address_space *mapping,
+static unsigned int do_page_cache_readahead_ctx(struct address_space *mapping,
 		struct file *filp, pgoff_t offset, unsigned long nr_to_read,
-		unsigned long lookahead_size)
+		unsigned long lookahead_size, const struct ra_context *ctx)
 {
+	int producer;
 	struct inode *inode = mapping->host;
 	struct page *page;
 	unsigned long end_index;	/* The last page we want to read */
@@ -161,6 +204,10 @@ unsigned int __do_page_cache_readahead(struct address_space *mapping,
 	unsigned int nr_pages = 0;
 	loff_t isize = i_size_read(inode);
 	gfp_t gfp_mask = readahead_gfp_mask(mapping);
+
+	/* This is the candidate range, before EOF and page-cache filtering. */
+	readahead_trace_window(mapping, offset, nr_to_read,
+				       lookahead_size);
 
 	if (isize == 0)
 		goto out;
@@ -196,6 +243,14 @@ unsigned int __do_page_cache_readahead(struct address_space *mapping,
 		if (!page)
 			break;
 		page->index = page_offset;
+		/* Exact caller demand excludes every page in the requested range.
+		 * Missing context is conservative: never guess from marker bits or
+		 * position in a shifted/limited readahead window.
+		 */
+		if (ctx && ctx->demand_size &&
+		    !(page_offset >= ctx->demand &&
+		      page_offset - ctx->demand < ctx->demand_size))
+			mi_mtmr_ra_prepare(page, &producer);
 		list_add(&page->lru, &page_pool);
 		if (page_idx == nr_to_read - lookahead_size)
 			SetPageReadahead(page);
@@ -211,19 +266,29 @@ unsigned int __do_page_cache_readahead(struct address_space *mapping,
 		read_pages(mapping, filp, &page_pool, nr_pages, gfp_mask);
 	BUG_ON(!list_empty(&page_pool));
 out:
+	mi_mtmr_ra_complete(&producer);
 	return nr_pages;
+}
+
+unsigned int __do_page_cache_readahead(struct address_space *mapping,
+		struct file *filp, pgoff_t offset, unsigned long nr_to_read,
+		unsigned long lookahead_size)
+{
+	return do_page_cache_readahead_ctx(mapping, filp, offset, nr_to_read,
+			lookahead_size, NULL);
 }
 
 /*
  * Chunk the readahead into 2 megabyte units, so that we don't pin too much
  * memory at once.
  */
-int force_page_cache_readahead(struct address_space *mapping, struct file *filp,
-			       pgoff_t offset, unsigned long nr_to_read)
+static int force_page_cache_readahead_ctx(struct address_space *mapping,
+		struct file *filp, pgoff_t offset, unsigned long nr_to_read,
+		const struct ra_context *ctx)
 {
 	struct backing_dev_info *bdi = inode_to_bdi(mapping->host);
 	struct file_ra_state *ra = &filp->f_ra;
-	unsigned long max_pages;
+	unsigned long max_pages, async = 0;
 
 	if (unlikely(!mapping->a_ops->readpage && !mapping->a_ops->readpages))
 		return -EINVAL;
@@ -234,6 +299,7 @@ int force_page_cache_readahead(struct address_space *mapping, struct file *filp,
 	 */
 	max_pages = max_t(unsigned long, bdi->io_pages, ra->ra_pages);
 	nr_to_read = min(nr_to_read, max_pages);
+	readahead_limit(mapping, ctx, &offset, &nr_to_read, &async, true);
 	while (nr_to_read) {
 		unsigned long this_chunk = (2 * 1024 * 1024) / PAGE_SIZE;
 
@@ -245,6 +311,28 @@ int force_page_cache_readahead(struct address_space *mapping, struct file *filp,
 		nr_to_read -= this_chunk;
 	}
 	return 0;
+}
+
+int force_page_cache_readahead(struct address_space *mapping, struct file *filp,
+	pgoff_t offset, unsigned long nr_to_read)
+{
+	return force_page_cache_readahead_ctx(mapping, filp, offset, nr_to_read, NULL);
+}
+
+unsigned long ra_submit_ctx(struct file_ra_state *ra,
+		struct address_space *mapping, struct file *filp,
+		const struct ra_context *ctx)
+{
+	pgoff_t start = READ_ONCE(ra->start);
+	unsigned long size = READ_ONCE(ra->size);
+	unsigned long async = READ_ONCE(ra->async_size);
+
+	if (readahead_limit(mapping, ctx, &start, &size, &async, false)) {
+		ra->start = start;
+		ra->size = size;
+		ra->async_size = async;
+	}
+	return do_page_cache_readahead_ctx(mapping, filp, start, size, async, ctx);
 }
 
 /*
@@ -383,7 +471,7 @@ static unsigned long
 ondemand_readahead(struct address_space *mapping,
 		   struct file_ra_state *ra, struct file *filp,
 		   bool hit_readahead_marker, pgoff_t offset,
-		   unsigned long req_size)
+		   unsigned long req_size, const struct ra_context *ctx)
 {
 	struct backing_dev_info *bdi = inode_to_bdi(mapping->host);
 	unsigned long max_pages = ra->ra_pages;
@@ -465,7 +553,12 @@ ondemand_readahead(struct address_space *mapping,
 	 * standalone, small random read
 	 * Read as is, and do not pollute the readahead state.
 	 */
-	return __do_page_cache_readahead(mapping, filp, offset, req_size, 0);
+	{
+		unsigned long async = 0;
+
+		readahead_limit(mapping, ctx, &offset, &req_size, &async, false);
+		return __do_page_cache_readahead(mapping, filp, offset, req_size, 0);
+	}
 
 initial_readahead:
 	ra->start = offset;
@@ -490,7 +583,7 @@ readit:
 		}
 	}
 
-	return ra_submit(ra, mapping, filp);
+	return ra_submit_ctx(ra, mapping, filp, ctx);
 }
 
 /**
@@ -507,9 +600,10 @@ readit:
  * pages onto the read request if access patterns suggest it will improve
  * performance.
  */
-void page_cache_sync_readahead(struct address_space *mapping,
+void page_cache_sync_readahead_ctx(struct address_space *mapping,
 			       struct file_ra_state *ra, struct file *filp,
-			       pgoff_t offset, unsigned long req_size)
+			       pgoff_t offset, unsigned long req_size,
+			       const struct ra_context *ctx)
 {
 	/* no read-ahead */
 	if (!ra->ra_pages)
@@ -520,12 +614,19 @@ void page_cache_sync_readahead(struct address_space *mapping,
 
 	/* be dumb */
 	if (filp && (filp->f_mode & FMODE_RANDOM)) {
-		force_page_cache_readahead(mapping, filp, offset, req_size);
+		force_page_cache_readahead_ctx(mapping, filp, offset, req_size, ctx);
 		return;
 	}
 
 	/* do read-ahead */
-	ondemand_readahead(mapping, ra, filp, false, offset, req_size);
+	ondemand_readahead(mapping, ra, filp, false, offset, req_size, ctx);
+}
+
+void page_cache_sync_readahead(struct address_space *mapping,
+	struct file_ra_state *ra, struct file *filp, pgoff_t offset,
+	unsigned long req_size)
+{
+	page_cache_sync_readahead_ctx(mapping, ra, filp, offset, req_size, NULL);
 }
 EXPORT_SYMBOL_GPL(page_cache_sync_readahead);
 
@@ -545,10 +646,10 @@ EXPORT_SYMBOL_GPL(page_cache_sync_readahead);
  * more pages.
  */
 void
-page_cache_async_readahead(struct address_space *mapping,
+page_cache_async_readahead_ctx(struct address_space *mapping,
 			   struct file_ra_state *ra, struct file *filp,
 			   struct page *page, pgoff_t offset,
-			   unsigned long req_size)
+			   unsigned long req_size, const struct ra_context *ctx)
 {
 	/* no read-ahead */
 	if (!ra->ra_pages)
@@ -572,7 +673,14 @@ page_cache_async_readahead(struct address_space *mapping,
 		return;
 
 	/* do read-ahead */
-	ondemand_readahead(mapping, ra, filp, true, offset, req_size);
+	ondemand_readahead(mapping, ra, filp, true, offset, req_size, ctx);
+}
+
+void page_cache_async_readahead(struct address_space *mapping,
+	struct file_ra_state *ra, struct file *filp, struct page *page,
+	pgoff_t offset, unsigned long req_size)
+{
+	page_cache_async_readahead_ctx(mapping, ra, filp, page, offset, req_size, NULL);
 }
 EXPORT_SYMBOL_GPL(page_cache_async_readahead);
 

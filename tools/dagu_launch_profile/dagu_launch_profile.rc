@@ -1,0 +1,17 @@
+# Platform integration, disabled until explicit trusted property opt-in.
+service dagu_launch_profile /system/bin/dagu_launch_profile_helper
+    class late_start
+    user root
+    group root
+    capabilities SYS_ADMIN
+    disabled
+    # Endpoint SID defaults to service domain; file_contexts labels the pathname.
+    socket dagu_launch_profile seqpacket 0600 system system
+
+on post-fs-data
+    mkdir /data/misc/dagu_launch_profile 0700 root root
+    copy /proc/sys/kernel/random/boot_id /data/misc/dagu_launch_profile/boot_id
+    restorecon_recursive /data/misc/dagu_launch_profile
+
+on property:sys.dagu_launch_profile.enabled=1
+    start dagu_launch_profile

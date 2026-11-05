@@ -5,15 +5,9 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-root = Path(__file__).resolve().parents[4]
-source = (root / 'fs/f2fs/file.c').read_text()
-start = source.index('static int f2fs_file_fadvise(')
-brace = source.index('{', start)
-end, depth = brace + 1, 1
-while depth:
-    depth += (source[end] == '{') - (source[end] == '}')
-    end += 1
-wrapper = source[start:end]
+from c_helpers import function
+
+wrapper = function('fs/f2fs/file.c', 'f2fs_file_fadvise')
 preamble = r'''
 #include <assert.h>
 #include <limits.h>

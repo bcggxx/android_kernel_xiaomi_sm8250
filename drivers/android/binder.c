@@ -43,6 +43,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/fdtable.h>
+#include <linux/binder_mme.h>
 #include <linux/file.h>
 #include <linux/freezer.h>
 #include <linux/fs.h>
@@ -5644,6 +5645,45 @@ out:
 	mutex_unlock(&context->context_mgr_node_lock);
 	return ret;
 }
+
+#if defined(CONFIG_MI_MEM_ENGINE) || defined(CONFIG_DAGU_LAUNCH_PROFILE)
+/*
+ * Private C06 controller bridge. A transferred Binder driver file pins its
+ * binder_proc. A strong handle pins its node; node->proc and ->is_dead are
+ * read under the established node/inner lock order. No numeric PID lookup.
+ * Only the root controller calls this; the source must be a system UID proc.
+ */
+struct task_struct *binder_mme_get_task(struct file *file, unsigned int handle)
+{
+	extern const struct file_operations binder_fops;
+	struct binder_proc *source;
+	struct binder_node *node;
+	struct task_struct *task = ERR_PTR(-ESRCH);
+
+	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
+		return ERR_PTR(-EPERM);
+	if (file->f_op != &binder_fops || !handle)
+		return ERR_PTR(-EINVAL);
+	source = file->private_data;
+	rcu_read_lock();
+	if (!uid_eq(task_uid(source->tsk), KUIDT_INIT(1000))) {
+		rcu_read_unlock();
+		return ERR_PTR(-EACCES);
+	}
+	rcu_read_unlock();
+	node = binder_get_node_from_ref(source, handle, true, NULL);
+	if (!node)
+		return ERR_PTR(-ENOENT);
+	binder_node_inner_lock(node);
+	if (node->proc && !node->proc->is_dead) {
+		task = node->proc->tsk;
+		get_task_struct(task);
+	}
+	binder_node_inner_unlock(node);
+	binder_put_node(node);
+	return task;
+}
+#endif
 
 static int binder_ioctl_get_node_info_for_ref(struct binder_proc *proc,
 		struct binder_node_info_for_ref *info)

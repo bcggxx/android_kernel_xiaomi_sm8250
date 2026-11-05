@@ -8,7 +8,7 @@ set -e
 # ==========================================
 if [ -z "$1" ]; then
     echo "[!] Error: No device specified."
-    echo "Usage: $0 <device_name> [ksu] [miui|aosp] [droidspaces]"
+    echo "Usage: $0 <device_name> [ksu] [miui|aosp] [droidspaces] [readahead-limit] [readahead-faults]"
     echo "Example: $0 lmi"
     echo "         $0 lmi ksu"
     echo "         $0 lmi ksu miui"
@@ -29,6 +29,8 @@ fi
 
 ENABLE_KSU=0
 ENABLE_DROIDSPACES=0
+ENABLE_READAHEAD_LIMIT=0
+ENABLE_READAHEAD_FAULTS=0
 TARGET_OS="both"
 
 shift
@@ -39,8 +41,35 @@ for arg in "$@"; do
         miui) TARGET_OS="miui" ;;
         aosp) TARGET_OS="aosp" ;;
         droidspaces) ENABLE_DROIDSPACES=1 ;;
+        readahead-limit) ENABLE_READAHEAD_LIMIT=1 ;;
+        readahead-faults) ENABLE_READAHEAD_FAULTS=1 ;;
     esac
 done
+
+# This experimental build is validated only for dagu; it never enables runtime policy.
+if [ "$ENABLE_READAHEAD_LIMIT" -eq 1 ] && [ "$DEVICE_NAME" != "dagu" ]; then
+    echo "[!] readahead-limit is supported only for dagu."
+    exit 1
+fi
+
+# Diagnostic capabilities are never selected by ordinary experimental builds.
+if [ "$ENABLE_READAHEAD_FAULTS" -eq 1 ] && {
+    [ "$DEVICE_NAME" != "dagu" ] || [ "$ENABLE_READAHEAD_LIMIT" -ne 1 ] ||
+    [ "$TARGET_OS" != "miui" ];
+}; then
+    echo "[!] readahead-faults requires dagu miui readahead-limit."
+    exit 1
+fi
+DAGU_FAULT_OPTIONS=(DEBUG_KERNEL DEBUG_FS FAULT_INJECTION FAILSLAB
+    FAIL_PAGE_ALLOC FAIL_MAKE_REQUEST FAULT_INJECTION_DEBUG_FS
+    FAULT_INJECTION_STACKTRACE_FILTER)
+DAGU_FAULT_DISABLED=(FAIL_IO_TIMEOUT FAIL_FUTEX FAIL_FUNCTION
+    FAIL_MMC_REQUEST UFS_FAULT_INJECTION)
+DAGU_CI_FEATURE_CONFIGS=(MIHW BINDER_PRIO KSHRINK_SLABD
+    MI_RMAP_EFFICIENCY READAHEAD_LIMIT MI_MTMR MI_ASYNC_RECLAIM
+    MOON_MMAP_OPT MI_MEMPOOL MI_FAULT_AROUND MI_RECLAIM_POOL
+    MI_MEM_ENGINE DAGU_LAUNCH_PROFILE MI_SW_SYNC SYNC_FILE
+    MI_UNION_POWER)
 
 # ==========================================
 # Configuration & Environment
@@ -435,9 +464,69 @@ build_target() {
         scripts/kconfig/merge_config.sh -O "${OUT_DIR}/" -m "${OUT_DIR}/.config" "${DS_CONFIG_FRAG}"
     fi
 
+    # The experimental option is opt-in, independent of the shipped defconfig.
+    if [ "$DEVICE_NAME" = "dagu" ]; then
+        if [ "$ENABLE_READAHEAD_LIMIT" -eq 1 ]; then
+            scripts/config --file "${OUT_DIR}/.config" -e READAHEAD_LIMIT
+        else
+            scripts/config --file "${OUT_DIR}/.config" -d READAHEAD_LIMIT
+        fi
+    fi
+
+    if [ "$DEVICE_NAME" = "dagu" ]; then
+        if [ "$ENABLE_READAHEAD_FAULTS" -eq 1 ]; then
+            for fault_option in "${DAGU_FAULT_OPTIONS[@]}"; do
+                scripts/config --file "${OUT_DIR}/.config" -e "$fault_option"
+            done
+            for fault_option in "${DAGU_FAULT_DISABLED[@]}"; do
+                scripts/config --file "${OUT_DIR}/.config" -d "$fault_option"
+            done
+        else
+            scripts/config --file "${OUT_DIR}/.config" -d FAULT_INJECTION
+        fi
+
+        echo "[*] Enabling all implemented dagu feature code for CI coverage..."
+        for feature_option in "${DAGU_CI_FEATURE_CONFIGS[@]}"; do
+            scripts/config --file "${OUT_DIR}/.config" -e "$feature_option"
+        done
+    fi
+
     # We always need to re-evaluate dependencies because BBG is injected unconditionally
     echo "[*] Updating config (make olddefconfig)..."
     make "${MAKE_OPTS[@]}" olddefconfig
+    if [ "$DEVICE_NAME" = "dagu" ] && [ "$ENABLE_READAHEAD_LIMIT" -eq 1 ]; then
+        grep -qx CONFIG_READAHEAD_LIMIT=y "${OUT_DIR}/.config" || {
+            echo "[!] Experimental READAHEAD_LIMIT did not survive configuration."
+            exit 1
+        }
+    fi
+
+    if [ "$DEVICE_NAME" = "dagu" ]; then
+        for feature_option in "${DAGU_CI_FEATURE_CONFIGS[@]}"; do
+            grep -qx "CONFIG_${feature_option}=y" "${OUT_DIR}/.config" || {
+                echo "[!] CI feature config missing: ${feature_option}"
+                exit 1
+            }
+        done
+
+        if [ "$ENABLE_READAHEAD_FAULTS" -eq 1 ]; then
+            for fault_option in "${DAGU_FAULT_OPTIONS[@]}"; do
+                grep -qx "CONFIG_${fault_option}=y" "${OUT_DIR}/.config" || {
+                    echo "[!] Diagnostic config missing: $fault_option"
+                    exit 1
+                }
+            done
+            for fault_option in "${DAGU_FAULT_DISABLED[@]}"; do
+                if grep -qx "CONFIG_${fault_option}=y" "${OUT_DIR}/.config"; then
+                    echo "[!] Unexpected diagnostic capability: $fault_option"
+                    exit 1
+                fi
+            done
+        elif grep -qx CONFIG_FAULT_INJECTION=y "${OUT_DIR}/.config"; then
+            echo "[!] Fault injection leaked into a non-diagnostic dagu build."
+            exit 1
+        fi
+    fi
 
     # ----------------------------------------------------
     # Compilation
@@ -480,7 +569,22 @@ build_target() {
         fi
         local GIT_COMMIT_ID=$(git rev-parse --short=8 HEAD 2>/dev/null || echo "unknown")
         local OS_UPPER=$(echo "$OS_TYPE" | tr '[:lower:]' '[:upper:]')
-        local ZIP_FILENAME="APTKernel_${OS_UPPER}_${DEVICE_NAME}_${KSU_ZIP_STR}${DS_ZIP_STR}_$(date +'%Y%m%d_%H%M%S')_anykernel3_${GIT_COMMIT_ID}.zip"
+        local EXPERIMENTAL_ZIP_STR=""
+        if [ "$ENABLE_READAHEAD_LIMIT" -eq 1 ]; then
+            EXPERIMENTAL_ZIP_STR="_ExperimentalReadAhead"
+        fi
+        if [ "$ENABLE_READAHEAD_FAULTS" -eq 1 ]; then
+            EXPERIMENTAL_ZIP_STR="${EXPERIMENTAL_ZIP_STR}_FaultInjectionDiagnostic"
+            mkdir -p anykernel/diagnostics
+            cp "${OUT_DIR}/.config" anykernel/diagnostics/kernel.config
+            printf '%s\n' "source=$(git rev-parse HEAD)" \
+                "purpose=dagu ticket02 allocation and isolated IO error tests" \
+                "faults=capabilities only; no injection armed by this package" \
+                > anykernel/diagnostics/build.txt
+        else
+            rm -rf anykernel/diagnostics
+        fi
+        local ZIP_FILENAME="APTKernel_${OS_UPPER}_${DEVICE_NAME}_${KSU_ZIP_STR}${DS_ZIP_STR}${EXPERIMENTAL_ZIP_STR}_$(date +'%Y%m%d_%H%M%S')_anykernel3_${GIT_COMMIT_ID}.zip"
         
         echo "[*] Zipping $ZIP_FILENAME ..."
         pushd anykernel > /dev/null

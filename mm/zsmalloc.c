@@ -251,6 +251,7 @@ struct link_free {
 
 static struct kmem_cache *handle_cachep;
 static struct kmem_cache *zspage_cachep;
+static bool zs_ready __read_mostly;
 
 struct zs_pool {
 	const char *name;
@@ -2461,6 +2462,10 @@ struct zs_pool *zs_create_pool(const char *name)
 	struct zs_pool *pool;
 	struct size_class *prev_class = NULL;
 
+	/* Built-in initcall failure does not prevent zram from probing. */
+	if (!READ_ONCE(zs_ready))
+		return NULL;
+
 	pool = kzalloc(sizeof(*pool), GFP_KERNEL);
 	if (!pool)
 		return NULL;
@@ -2617,11 +2622,12 @@ static int __init zs_init(void)
 	if (ret)
 		goto hp_setup_fail;
 
+	zs_stat_init();
+	WRITE_ONCE(zs_ready, true);
+
 #ifdef CONFIG_ZPOOL
 	zpool_register_driver(&zs_zpool_driver);
 #endif
-
-	zs_stat_init();
 
 	return 0;
 

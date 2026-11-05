@@ -59,6 +59,9 @@
 
 #include "internal.h"
 #include "mi_rmap_efficiency.h"
+#include "mi_async_reclaim.h"
+#include "mi_mtmr.h"
+#include "moon_mmap_opt.h"
 #include <linux/sizes.h>
 
 #ifdef CONFIG_RTMM
@@ -1067,13 +1070,16 @@ enum page_references {
 };
 
 static enum page_references page_check_references(struct page *page,
-						  struct scan_control *sc)
+						  struct scan_control *sc,
+						  bool *file_contended)
 {
 	int referenced_ptes, referenced_page;
 	unsigned long vm_flags;
 
-	referenced_ptes = page_referenced(page, 1, sc->target_mem_cgroup,
-					  &vm_flags);
+	referenced_ptes = page_referenced_trylock(page, 1, sc->target_mem_cgroup,
+					  &vm_flags, file_contended);
+	if (file_contended && *file_contended)
+		return PAGEREF_KEEP;
 	referenced_page = TestClearPageReferenced(page);
 
 	/*
@@ -1168,7 +1174,8 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 				      struct scan_control *sc,
 				      enum ttu_flags ttu_flags,
 				      struct reclaim_stat *stat,
-				      bool force_reclaim)
+				      bool force_reclaim,
+				      unsigned long *async_accepted)
 {
 	LIST_HEAD(ret_pages);
 	LIST_HEAD(free_pages);
@@ -1193,6 +1200,8 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		int may_enter_fs;
 		enum page_references references = PAGEREF_RECLAIM;
 		bool dirty, writeback;
+		bool file_contended = false;
+		bool *file_trylock = NULL;
 
 		cond_resched();
 
@@ -1201,6 +1210,13 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 
 		if (!trylock_page(page))
 			goto keep;
+
+		/* Only the inactive kswapd caller can transfer isolated ownership. */
+		if (async_accepted && !force_reclaim && !sc->target_vma &&
+		    !PageCompound(page) && !PageAnon(page) &&
+		    !PageSwapBacked(page) && !PageKsm(page) &&
+		    mi_async_reclaim_ready())
+			file_trylock = &file_contended;
 
 		VM_BUG_ON_PAGE(PageActive(page), page);
 		if (pgdat)
@@ -1343,7 +1359,8 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 			}
 #endif
 			if (references == PAGEREF_RECLAIM)
-				references = page_check_references(page, sc);
+				references = page_check_references(page, sc,
+							   file_trylock);
 		}
 
 		switch (references) {
@@ -1412,9 +1429,13 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		if (page_mapped(page)) {
 			enum ttu_flags flags = ttu_flags | TTU_BATCH_FLUSH;
 
+			/* A file page may have been mapped since the first check. */
+			if (!sc->may_unmap)
+				goto keep_locked;
 			if (unlikely(PageTransHuge(page)))
 				flags |= TTU_SPLIT_HUGE_PMD;
-			if (!try_to_unmap(page, flags, sc->target_vma)) {
+			if (!try_to_unmap_trylock(page, flags, sc->target_vma,
+						file_trylock)) {
 				nr_unmap_fail++;
 				goto activate_locked;
 			}
@@ -1577,6 +1598,11 @@ activate_locked:
 keep_locked:
 		unlock_page(page);
 keep:
+		/* A successful handoff consumes this list's isolation reference. */
+		if (file_contended && mi_async_reclaim_queue(page)) {
+			(*async_accepted)++;
+			continue;
+		}
 		list_add(&page->lru, &ret_pages);
 		VM_BUG_ON_PAGE(PageLRU(page) || PageUnevictable(page), page);
 	}
@@ -1601,6 +1627,36 @@ keep:
 	return nr_reclaimed;
 }
 
+#if defined(CONFIG_MI_ASYNC_RECLAIM) || defined(CONFIG_MI_MTMR)
+/* A single base file page; pgdat keeps shrink_page_list from self-accounting. */
+unsigned long mi_reclaim_file_page(struct list_head *pages,
+				  struct pglist_data *pgdat, bool unmapped_only)
+{
+	struct scan_control sc = {
+		.gfp_mask = GFP_KERNEL,
+		.priority = DEF_PRIORITY,
+		.may_writepage = 1,
+		.may_unmap = 1,
+		.may_swap = 1,
+	};
+	unsigned long reclaimed;
+	struct page *page;
+
+	/* MTMR never unmaps a page remapped after its final eligibility check. */
+	sc.may_unmap = !unmapped_only;
+	/* NULL admission state prevents recursive handoff by either worker. */
+	reclaimed = shrink_page_list(pages, pgdat, &sc, 0, NULL, false, NULL);
+	while (!list_empty(pages)) {
+		page = lru_to_page(pages);
+		list_del_init(&page->lru);
+		putback_lru_page(page);
+	}
+	/* Both successful reclaim and putback terminate the original isolation. */
+	mod_node_page_state(pgdat, NR_ISOLATED_FILE, -1);
+	return reclaimed;
+}
+#endif
+
 unsigned long reclaim_clean_pages_from_list(struct zone *zone,
 					    struct list_head *page_list)
 {
@@ -1624,7 +1680,7 @@ unsigned long reclaim_clean_pages_from_list(struct zone *zone,
 	}
 
 	ret = shrink_page_list(&clean_pages, zone->zone_pgdat, &sc,
-			TTU_IGNORE_ACCESS, NULL, true);
+			TTU_IGNORE_ACCESS, NULL, true, NULL);
 	list_splice(&clean_pages, page_list);
 	mod_node_page_state(zone->zone_pgdat, NR_ISOLATED_FILE, -ret);
 	return ret;
@@ -1650,7 +1706,7 @@ unsigned long reclaim_pages_from_list(struct list_head *page_list,
 		ClearPageActive(page);
 
 	nr_reclaimed = shrink_page_list(page_list, NULL, &sc,
-			TTU_IGNORE_ACCESS, NULL, true);
+			TTU_IGNORE_ACCESS, NULL, true, NULL);
 
 	while (!list_empty(page_list)) {
 		page = lru_to_page(page_list);
@@ -1900,8 +1956,9 @@ int isolate_lru_page(struct page *page)
 	if (PageLRU(page)) {
 		struct zone *zone = page_zone(page);
 		struct lruvec *lruvec;
+		unsigned long flags;
 
-		spin_lock_irq(zone_lru_lock(zone));
+		spin_lock_irqsave(zone_lru_lock(zone), flags);
 		lruvec = mem_cgroup_page_lruvec(page, zone->zone_pgdat);
 		if (PageLRU(page)) {
 			int lru = page_lru(page);
@@ -1910,7 +1967,7 @@ int isolate_lru_page(struct page *page)
 			del_page_from_lru_list(page, lruvec, lru);
 			ret = 0;
 		}
-		spin_unlock_irq(zone_lru_lock(zone));
+		spin_unlock_irqrestore(zone_lru_lock(zone), flags);
 	}
 	return ret;
 }
@@ -2032,6 +2089,8 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 	unsigned long nr_scanned;
 	unsigned long nr_reclaimed = 0;
 	unsigned long nr_taken;
+	unsigned long async_accepted = 0;
+	unsigned long *async = NULL;
 	struct reclaim_stat stat = {};
 	isolate_mode_t isolate_mode = 0;
 	int file = is_file_lru(lru);
@@ -2081,8 +2140,14 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 	if (nr_taken == 0)
 		return 0;
 
+	/* Avoid exporting direct-reclaim filesystem/IO lock dependencies. */
+	if (file && current_is_kswapd() && global_reclaim(sc) && !sc->order &&
+	    !sc->target_vma && (sc->gfp_mask & __GFP_FS) &&
+	    (sc->gfp_mask & __GFP_IO) &&
+	    !(sc->gfp_mask & (__GFP_DMA | __GFP_DMA32)))
+		async = &async_accepted;
 	nr_reclaimed = shrink_page_list(&page_list, pgdat, sc, 0,
-				&stat, false);
+				&stat, false, async);
 
 	spin_lock_irq(&pgdat->lru_lock);
 
@@ -2100,7 +2165,8 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 
 	putback_inactive_pages(lruvec, &page_list);
 
-	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
+	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file,
+			      -(long)(nr_taken - async_accepted));
 
 	spin_unlock_irq(&pgdat->lru_lock);
 
@@ -2220,6 +2286,9 @@ static void shrink_active_list(unsigned long nr_to_scan,
 	isolate_mode_t isolate_mode = 0;
 	int file = is_file_lru(lru);
 	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
+#ifdef CONFIG_MI_RMAP_EFFICIENCY
+	bool protect_highmap = mi_rmap_may_protect(sc, false);
+#endif
 
 	lru_add_drain();
 
@@ -2257,6 +2326,20 @@ static void shrink_active_list(unsigned long nr_to_scan,
 			}
 		}
 
+#ifdef CONFIG_MI_RMAP_EFFICIENCY
+		/* KEEP on the active list means another trip around that list. */
+		if (protect_highmap &&
+		    mi_rmap_check(page, sc->nr_scanned, sc->priority,
+				  &sc->nr_mi_rmap_protected) != MI_RMAP_RECLAIM) {
+			nr_rotated += hpage_nr_pages(page);
+			list_add(&page->lru, &l_active);
+			continue;
+		}
+
+		/* Budget exhaustion may bypass rmap only to deactivate the page. */
+		if (protect_highmap && mi_rmap_should_bypass(page, sc->priority))
+			goto deactivate;
+#endif
 		if (page_referenced(page, 0, sc->target_mem_cgroup,
 				    &vm_flags)) {
 			nr_rotated += hpage_nr_pages(page);
@@ -2275,6 +2358,9 @@ static void shrink_active_list(unsigned long nr_to_scan,
 			}
 		}
 
+#ifdef CONFIG_MI_RMAP_EFFICIENCY
+deactivate:
+#endif
 		ClearPageActive(page);	/* we are de-activating */
 		SetPageWorkingset(page);
 		list_add(&page->lru, &l_inactive);
@@ -2971,7 +3057,8 @@ static bool shrink_node(pg_data_t *pgdat, struct scan_control *sc)
 			node_lru_pages += lru_pages;
 
 			if (!wakeup_kshrink_slabd(sc->gfp_mask, pgdat->node_id,
-						 memcg, sc->priority))
+						 memcg, sc->priority,
+						 global_reclaim(sc)))
 				shrink_slab(sc->gfp_mask, pgdat->node_id, memcg,
 					    sc->priority);
 
@@ -3387,6 +3474,16 @@ static bool throttle_direct_reclaim(gfp_t gfp_mask, struct zonelist *zonelist,
 	 */
 	if (fatal_signal_pending(current))
 		goto out;
+
+#ifdef CONFIG_MOON_MMAP_OPT
+	/*
+	 * The recovered Moon policy gives real-time tasks a bounded bypass of
+	 * the pfmemalloc wait. Direct reclaim itself and all normal eligibility
+	 * checks remain unchanged.
+	 */
+	if (moon_mmap_opt_rt_bypass(current))
+		goto out;
+#endif
 
 	/*
 	 * Check if the pfmemalloc reserves are ok by finding the first node

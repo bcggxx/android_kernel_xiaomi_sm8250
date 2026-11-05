@@ -56,6 +56,20 @@ enum mi_rmap_control mi_rmap_check(struct page *page, unsigned long nr_scanned,
 	return control;
 }
 
+/* A bypass deactivates an active page; it never spends protection budget. */
+bool mi_rmap_should_bypass(struct page *page, int priority)
+{
+	unsigned int threshold = READ_ONCE(mi_mapcount_thres);
+
+	if (!READ_ONCE(mi_rmap_enabled) || !page ||
+	    priority <= DEF_PRIORITY / 2 || priority >= DEF_PRIORITY - 2 ||
+	    PageCompound(page) || PageAnon(page) || PageSwapBacked(page) ||
+	    !page_mapped(page))
+		return false;
+
+	return page_mapcount(page) >= mi_keep_threshold(threshold, priority);
+}
+
 static ssize_t enabled_show(struct kobject *kobj, struct kobj_attribute *attr,
 			    char *buf)
 {
@@ -118,7 +132,6 @@ static int __init mi_rmap_efficiency_init(void)
 		kobject_put(kobj);
 		return ret;
 	}
-	WRITE_ONCE(mi_rmap_enabled, true);
 	return 0;
 }
 late_initcall(mi_rmap_efficiency_init);

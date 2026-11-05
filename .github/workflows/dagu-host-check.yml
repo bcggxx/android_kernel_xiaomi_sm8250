@@ -5,16 +5,27 @@ on:
     paths:
       - drivers/block/zram/zram_drv.c
       - drivers/block/zram/zram_drv.h
-      - tools/testing/selftests/zram/test_miui_tracking_parser.py
       - fs/f2fs/file.c
-      - tools/testing/selftests/f2fs/test_seq_file_ra.py
+      - mm/mi_mtmr.c
+      - mm/mi_mtmr.h
+      - mm/Kconfig
+      - mm/dagu_launch_profile.c
       - mm/kshrink_slabd.c
       - mm/mi_rmap_efficiency.c
       - mm/mi_rmap_efficiency.h
+      - mm/readahead_limit.c
+      - mm/readahead.c
+      - mm/filemap.c
+      - mm/internal.h
+      - include/linux/readahead_limit.h
+      - include/trace/events/filemap.h
       - mm/vmscan.c
-      - tools/testing/selftests/vm/test_dagu_reclaim.py
+      - mm/zsmalloc.c
       - drivers/staging/binder_prio/binder_prio.c
-      - tools/testing/selftests/binder/test_graphics_priority.py
+      - tools/testing/selftests/dagu/**
+      - tools/testing/selftests/Makefile
+      - tools/testing/selftests/lib.mk
+      - tools/dagu_launch_profile/**
       - .github/workflows/dagu-host-check.yml
 permissions:
   contents: read
@@ -24,19 +35,20 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
-      - name: Test actual zram parser and allocation rollback with ASan and UBSan
+      - name: Run dagu kselftests with ASan and UBSan
         env:
           SANITIZERS: address,undefined
-        run: python3 tools/testing/selftests/zram/test_miui_tracking_parser.py
-      - name: Test F2FS sequential readahead wrapper with ASan and UBSan
-        env:
-          SANITIZERS: address,undefined
-        run: python3 tools/testing/selftests/f2fs/test_seq_file_ra.py
-      - name: Test optional reclaim policies and concurrent submissions
-        env:
-          SANITIZERS: address,undefined
-        run: python3 tools/testing/selftests/vm/test_dagu_reclaim.py
-      - name: Test graphics Binder matching and RT permission limits
-        env:
-          SANITIZERS: address,undefined
-        run: python3 tools/testing/selftests/binder/test_graphics_priority.py
+        run: |
+          set -o pipefail
+          make -C tools/testing/selftests TARGETS=dagu run_tests | tee dagu-tests.log
+          # This kernel's legacy TAP runner does not propagate test failures.
+          ! grep -Eq '^not ok .*\[FAIL\]' dagu-tests.log
+      - name: Check DLP2 profile publication
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Werror -O1 -pthread \
+            -Itools/dagu_launch_profile -Itools/dagu_launch_profile/include \
+            tools/dagu_launch_profile/tests/profile_publish_test.c \
+            tools/dagu_launch_profile/dlp_profile_store.c \
+            tools/dagu_launch_profile/dlp_sha256.c \
+            -o /tmp/dlp-profile-publish-test
+          /tmp/dlp-profile-publish-test

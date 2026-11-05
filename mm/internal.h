@@ -58,6 +58,34 @@ extern unsigned int __do_page_cache_readahead(struct address_space *mapping,
 		struct file *filp, pgoff_t offset, unsigned long nr_to_read,
 		unsigned long lookahead_size);
 
+/* Private MM demand context. Hints passed to the algorithm remain separate. */
+struct ra_context {
+	pgoff_t demand;
+	unsigned long demand_size;
+	unsigned int source;
+};
+#ifdef CONFIG_READAHEAD_LIMIT
+bool readahead_limit(struct address_space *mapping, const struct ra_context *ctx,
+		     pgoff_t *start, unsigned long *size, unsigned long *async,
+		     bool force);
+#else
+static inline bool readahead_limit(struct address_space *mapping,
+		const struct ra_context *ctx, pgoff_t *start, unsigned long *size,
+		unsigned long *async, bool force)
+{
+	return false;
+}
+#endif
+void page_cache_sync_readahead_ctx(struct address_space *mapping,
+		struct file_ra_state *ra, struct file *filp, pgoff_t offset,
+		unsigned long hint, const struct ra_context *ctx);
+void page_cache_async_readahead_ctx(struct address_space *mapping,
+		struct file_ra_state *ra, struct file *filp, struct page *page,
+		pgoff_t offset, unsigned long hint, const struct ra_context *ctx);
+unsigned long ra_submit_ctx(struct file_ra_state *ra,
+		struct address_space *mapping, struct file *filp,
+		const struct ra_context *ctx);
+
 /*
  * Submit IO for the read-ahead request in file_ra_state.
  */
@@ -605,10 +633,12 @@ unsigned long shrink_slab(gfp_t gfp_mask, int nid,
 			  struct mem_cgroup *memcg, int priority);
 #ifdef CONFIG_KSHRINK_SLABD
 bool wakeup_kshrink_slabd(gfp_t gfp_mask, int nid,
-			struct mem_cgroup *memcg, int priority);
+			struct mem_cgroup *memcg, int priority,
+			bool global_reclaim);
 #else
 static inline bool wakeup_kshrink_slabd(gfp_t gfp_mask, int nid,
-				      struct mem_cgroup *memcg, int priority)
+				      struct mem_cgroup *memcg, int priority,
+				      bool global_reclaim)
 {
 	return false;
 }
