@@ -22,6 +22,7 @@ available subsections can be seen below.
    device-io
    device_connection
    dma-buf
+   mi-sw-sync
    device_link
    message-based
    sound
