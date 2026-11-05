@@ -15,6 +15,7 @@ various features of the Linux memory management
 
    kshrink_slabd
    mi_rmap_efficiency
+   moon-mmap-opt
    swap_numa
    zswap
 

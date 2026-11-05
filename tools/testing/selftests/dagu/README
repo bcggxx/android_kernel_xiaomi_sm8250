@@ -94,3 +94,8 @@ mi_mtmr_ra: finite actual producer pin, insertion, completion, age, bounded
 shrinker release and per-policy close checks. Host adapters do not execute real
 FS submission, IO, pagecache, LRU, PTE, RCU or freezer races. The required real
 FS -> age -> normal reclaim/return -> disable seam remains unrun.
+
+test_moon_mmap_opt.py extracts the actual policy predicate used by the target
+direct-reclaim throttle call site. It checks real-time policy classification
+and null handling only. It does not enter the pfmemalloc wait, execute direct
+reclaim, or prove scheduler/OOM behavior under memory pressure.

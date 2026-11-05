@@ -1002,6 +1002,20 @@ config MI_ASYNC_RECLAIM
 	  waits for the running page. Requires memory-pressure device testing.
 	  See Documentation/vm/mi-async-reclaim.rst.
 
+config MOON_MMAP_OPT
+	bool "Moon real-time direct-reclaim throttle bypass (experimental)"
+	depends on ARM64
+	default n
+	help
+	  Allow SCHED_FIFO, SCHED_RR and SCHED_DEADLINE tasks to bypass the
+	  pfmemalloc wait in direct-reclaim throttling. Direct reclaim and all
+	  other allocation eligibility checks remain unchanged.
+
+	  This implements only the real-time throttle behavior declared by the
+	  recovered Moon Kconfig. It does not implement the separately mentioned
+	  DMA-IOMMU high-order allocation tuning. Requires target-device memory
+	  pressure and real-time scheduler validation. If unsure, say N.
+
 config MI_MEMPOOL
 	bool "Experimental allocator reserve for orders 0, 1, 4 and 5"
 	depends on ARM64 && ARM64_4K_PAGES && SYSFS && !MEMORY_HOTPLUG
