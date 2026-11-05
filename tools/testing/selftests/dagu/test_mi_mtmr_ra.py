@@ -5,7 +5,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from c_helpers import function
+from c_helpers import function, read_source
 
 # The actual kernel function names form the agreed controllable seam. Missing
 # implementations are deliberately the first red result.
@@ -81,7 +81,7 @@ static void mtmr_consume(struct mtmr_slot *s);
 static void wait_progress(void);
 #define wait_event(w,c) do { (void)(w); if (!(c)) wait_progress(); assert(c); } while(0)
 '''
-text = Path('mm/mi_mtmr.c').read_text()
+text = read_source('mm/mi_mtmr.c')
 # Keep actual slot layout and policy accounting, with kernel lock declarations
 # supplied by this finite harness. No simulated pagecache or LRU operations.
 layout = text[text.index('enum mtmr_owner'):text.index('static DEFINE_SPINLOCK')]

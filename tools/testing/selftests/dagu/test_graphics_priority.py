@@ -39,12 +39,13 @@ struct task_struct {
 struct binder_thread { struct task_struct *task; };
 struct binder_node { bool inherit_rt; };
 struct binder_buffer { struct binder_node *target_node; };
+struct binder_priority { unsigned int sched_policy; int prio; };
 struct binder_transaction {
     struct binder_buffer *buffer;
     unsigned int flags;
     struct binder_thread *from;
     pthread_mutex_t lock;
-    int saved_priority;
+    struct binder_priority saved_priority;
 };
 static void get_task_comm(char *buf, struct task_struct *task) {
     memcpy(buf, task->comm, TASK_COMM_LEN);
@@ -90,7 +91,11 @@ int main(void) {
     struct binder_thread from;
     struct binder_node node = {.inherit_rt = true};
     struct binder_buffer buffer = {.target_node = &node};
-    struct binder_transaction t = {.buffer = &buffer, .lock = PTHREAD_MUTEX_INITIALIZER, .saved_priority = 120};
+    struct binder_transaction t = {
+        .buffer = &buffer,
+        .lock = PTHREAD_MUTEX_INITIALIZER,
+        .saved_priority = {.sched_policy = SCHED_NORMAL, .prio = 120},
+    };
     name_task(&home, "com.miui.home", 10, 10, NULL);
     name_task(&render, "RenderThread", 11, 10, &home);
     name_task(&sf, "surfaceflinger", 20, 20, NULL);
@@ -137,12 +142,14 @@ int main(void) {
     t.buffer = &buffer; buffer.target_node = &node; node.inherit_rt = true;
     binder_prio_set_priority(NULL, &t, &sf);
     assert(calls == 1 && last_rt == 1 && (last_policy & SCHED_RESET_ON_FORK));
-    assert(sf.normal_prio == 98 && t.saved_priority == 120);
+    assert(sf.normal_prio == 98 && t.saved_priority.prio == 120);
+    t.saved_priority.sched_policy = SCHED_FIFO;
     binder_prio_set_priority(NULL, &t, &sf);
     assert(calls == 1);
     sf.policy = SCHED_RR; sf.normal_prio = 80;
     binder_prio_set_priority(NULL, &t, &sf);
     assert(calls == 1 && sf.policy == SCHED_RR && sf.normal_prio == 80);
+    t.saved_priority.sched_policy = SCHED_NORMAL;
     sf.policy = SCHED_NORMAL; sf.normal_prio = 120;
     sf.rt_limit = 0; sf.cap_nice = true;
     binder_prio_set_priority(NULL, &t, &sf);
@@ -167,6 +174,7 @@ int main(void) {
         binder_prio_set_priority(NULL, &t, &sf);
         assert(calls == before + 1 && sf.normal_prio == 98);
         assert(last_policy == (SCHED_FIFO | SCHED_RESET_ON_FORK));
+        t.saved_priority.sched_policy = SCHED_FIFO;
         binder_prio_set_priority(NULL, &t, &sf);
         assert(calls == before + 1); /* Equal RT is preserved. */
         sf.policy = SCHED_RR; sf.normal_prio = 80;
@@ -174,6 +182,7 @@ int main(void) {
         assert(calls == before + 1 && sf.normal_prio == 80);
         sf.policy = SCHED_NORMAL; sf.normal_prio = 120;
         sf.rt_limit = 0;
+        t.saved_priority.sched_policy = SCHED_NORMAL;
         binder_prio_set_priority(NULL, &t, &sf);
         assert(calls == before + 1);
         sf.rt_limit = 1; node.inherit_rt = false;
@@ -198,7 +207,8 @@ int main(void) {
         snprintf(other.comm, TASK_COMM_LEN, "%s", extra_names[i]);
         extra_main_threads = false;
         binder_prio_set_priority(NULL, &t, &sf);
-        assert(calls == before + 1 && other.refs == 1 && t.saved_priority == 120);
+        assert(calls == before + 1 && other.refs == 1 &&
+               t.saved_priority.prio == 120);
         assert(binder_prio_is_graphics_sender(&home, &sf));
         assert(binder_prio_is_graphics_sender(&camera, &sf));
     }
