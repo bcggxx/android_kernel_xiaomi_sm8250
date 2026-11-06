@@ -6,7 +6,7 @@
 #include <linux/binder_mme.h>
 #include <linux/capability.h>
 #include <linux/cred.h>
-#include <linux/dagu_launch_profile.h>
+#include <linux/launch_profile.h>
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/init.h>
@@ -24,7 +24,7 @@
 #include <linux/uaccess.h>
 #include <linux/vmalloc.h>
 #include <linux/workqueue.h>
-#include <uapi/linux/dagu_launch_profile.h>
+#include <uapi/linux/launch_profile.h>
 #define DLP_FILES 128
 #define DLP_RANGES 4096
 #define DLP_PAGES ((32 * 1024 * 1024) / PAGE_SIZE)
@@ -380,7 +380,7 @@ static long dlp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			}
 			refcount_inc(&s->refs);
 			atomic_inc(&dlp_snapshots);
-			ret = anon_inode_getfd("dagu-launch-snapshot", &dlp_snapshot_ops, s,
+			ret = anon_inode_getfd("launch-profile-snapshot", &dlp_snapshot_ops, s,
 			O_RDONLY | O_CLOEXEC);
 			if (ret < 0) {
 				atomic_dec(&dlp_snapshots);
@@ -462,7 +462,7 @@ static const struct file_operations dlp_ops = {
 	.llseek = no_llseek,
 };
 static struct miscdevice dlp_device = {
-	.minor = MISC_DYNAMIC_MINOR, .name = "dagu_launch_profile",
+	.minor = MISC_DYNAMIC_MINOR, .name = "launch_profile",
 	.fops = &dlp_ops, .mode = 0600,
 };
 static int __init dlp_init(void)

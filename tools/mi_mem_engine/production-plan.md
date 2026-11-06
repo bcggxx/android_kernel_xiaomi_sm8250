@@ -1,6 +1,6 @@
 # C06 warm/hot production plan
 
-Fixed producer baseline: AOSP frameworks/base android-15.0.0_r1; target kernel SM8250/dagu 4.19.325. Runtime is disabled by default. No Android build/device validation is available in this worktree.
+Fixed producer baseline: AOSP frameworks/base android-15.0.0_r1; target kernel SM8250-family 4.19.325. Runtime is disabled by default. No Android build/device validation is available in this worktree.
 
 ## Public boundaries and design change
 

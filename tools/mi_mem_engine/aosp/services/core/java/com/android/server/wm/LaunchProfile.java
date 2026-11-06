@@ -41,9 +41,9 @@ import java.util.concurrent.atomic.AtomicLong;
 import libcore.io.IoUtils;
 
 /** Fixed AOSP15 launch adapter. Exact ActivityRecord tokens bridge pending cold attach. */
-final class DaguLaunchProfile {
-    private static final String TAG = "DaguLaunchProfile";
-    private static final String ENABLED_PROPERTY = "sys.dagu_launch_profile.enabled";
+final class LaunchProfile {
+    private static final String TAG = "LaunchProfile";
+    private static final String ENABLED_PROPERTY = "sys.launch_profile.enabled";
     private static final int WIRE_MAGIC = 0x32504c44;
     private static final int WIRE_VERSION = 2;
     private static final int WIRE_HEADER_SIZE = 72;
@@ -181,7 +181,7 @@ final class DaguLaunchProfile {
         MiMemEngineDeathRegistration death;
     }
 
-    DaguLaunchProfile(ActivityTaskSupervisor supervisor) {
+    LaunchProfile(ActivityTaskSupervisor supervisor) {
         mSupervisor = supervisor;
         mContext = supervisor.mService.mContext;
         mPackageManager = mContext.getPackageManager();
@@ -432,7 +432,7 @@ final class DaguLaunchProfile {
         } catch (NoSuchAlgorithmException impossible) {
             throw new AssertionError(impossible);
         }
-        Collections.sort(digests, DaguLaunchProfile::compareBytes);
+        Collections.sort(digests, LaunchProfile::compareBytes);
         List<byte[]> unique = new ArrayList<>(digests.size());
         for (byte[] digest : digests) {
             if (unique.isEmpty() || !Arrays.equals(unique.get(unique.size() - 1), digest)) {
@@ -483,12 +483,12 @@ final class DaguLaunchProfile {
     private void ensureSocket() throws IOException {
         if (mSocket != null) return;
         LocalSocket socket = new LocalSocket(LocalSocket.SOCKET_SEQPACKET);
-        socket.connect(new LocalSocketAddress("dagu_launch_profile",
+        socket.connect(new LocalSocketAddress("launch_profile",
                 LocalSocketAddress.Namespace.RESERVED));
         socket.setSoTimeout(200);
         if (socket.getPeerCredentials().getUid() != 0) {
             IoUtils.closeQuietly(socket);
-            throw new IOException("untrusted dagu_launch_profile peer");
+            throw new IOException("untrusted launch_profile peer");
         }
         mSocket = socket;
     }
@@ -554,14 +554,14 @@ final class DaguLaunchProfile {
         }
         byte[] reply = new byte[WIRE_ACK_SIZE];
         if (mSocket.getInputStream().read(reply) != reply.length) {
-            throw new IOException("truncated dagu_launch_profile ACK");
+            throw new IOException("truncated launch_profile ACK");
         }
         ByteBuffer ack = ByteBuffer.wrap(reply).order(ByteOrder.LITTLE_ENDIAN);
         if (ack.getInt() != WIRE_MAGIC || ack.getShort() != WIRE_VERSION
                 || ack.getShort() != WIRE_ACK_SIZE || ack.getInt() != packet.getInt(8)
                 || ack.getInt() != 0 || ack.getLong() != epoch
                 || ack.getLong() != cookie) {
-            throw new IOException("dagu_launch_profile request rejected");
+            throw new IOException("launch_profile request rejected");
         }
     }
 

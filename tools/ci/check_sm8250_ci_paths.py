@@ -14,8 +14,8 @@ def main():
     parser.add_argument('--manifest', type=Path)
     parser.add_argument('--workflow', type=Path)
     args = parser.parse_args()
-    manifest = args.manifest or args.root / 'tools/ci/dagu-dependencies.json'
-    workflow = args.workflow or args.root / '.github/workflows/dagu-host-check.yml'
+    manifest = args.manifest or args.root / 'tools/ci/sm8250-dependencies.json'
+    workflow = args.workflow or args.root / '.github/workflows/sm8250-host-check.yml'
     try:
         dependencies = json.loads(manifest.read_text())
         if not isinstance(dependencies, list) or not dependencies:
@@ -52,7 +52,7 @@ def main():
     except (OSError, ValueError, IndexError) as error:
         print(str(error), file=sys.stderr)
         return 1
-    print('Dagu CI dependency paths covered')
+    print('SM8250 CI dependency paths covered')
     return 0
 
 

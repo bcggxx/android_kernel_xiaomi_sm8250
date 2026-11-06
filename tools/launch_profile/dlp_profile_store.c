@@ -17,7 +17,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include <linux/dagu_launch_profile.h>
+#include <linux/launch_profile.h>
 
 #include "dlp_sha256.h"
 

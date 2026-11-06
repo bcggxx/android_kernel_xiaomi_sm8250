@@ -1,5 +1,5 @@
 [
-  ".github/workflows/dagu-host-check.yml",
+  ".github/workflows/sm8250-host-check.yml",
   "drivers/block/zram/zram_drv.c",
   "drivers/block/zram/zram_drv.h",
   "drivers/staging/binder_prio/binder_prio.c",

@@ -130,4 +130,4 @@ obj-$(CONFIG_MI_MTMR) += mi_mtmr.o
 
 obj-$(CONFIG_MI_MEM_ENGINE) += mi_mem_engine.o
 
-obj-$(CONFIG_DAGU_LAUNCH_PROFILE) += dagu_launch_profile.o
+obj-$(CONFIG_LAUNCH_PROFILE) += launch_profile.o

@@ -1,4 +1,4 @@
-name: Dagu CI path coverage
+name: SM8250 CI path coverage
 on:
   pull_request:
   workflow_dispatch:
@@ -10,5 +10,5 @@ jobs:
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@v7
-      - run: python3 tools/ci/test_dagu_ci_paths.py
-      - run: python3 tools/ci/check_dagu_ci_paths.py
+      - run: python3 tools/ci/test_sm8250_ci_paths.py
+      - run: python3 tools/ci/check_sm8250_ci_paths.py

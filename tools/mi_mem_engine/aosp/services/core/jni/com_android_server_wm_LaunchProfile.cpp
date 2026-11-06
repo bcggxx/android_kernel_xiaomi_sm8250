@@ -35,8 +35,8 @@ static jintArray binderIdentity(JNIEnv* env, jclass, jobject object) {
 static const JNINativeMethod METHODS[] = {
     {"binderIdentity", "(Landroid/os/IBinder;)[I", reinterpret_cast<void*>(binderIdentity)},
 };
-int register_android_server_wm_DaguLaunchProfile(JNIEnv* env) {
+int register_android_server_wm_LaunchProfile(JNIEnv* env) {
     return AndroidRuntime::registerNativeMethods(env,
-            "com/android/server/wm/DaguLaunchProfile", METHODS, 1);
+            "com/android/server/wm/LaunchProfile", METHODS, 1);
 }
 } // namespace android

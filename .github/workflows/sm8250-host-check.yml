@@ -1,4 +1,4 @@
-name: Dagu host checks
+name: SM8250 host checks
 on:
   workflow_dispatch:
   pull_request:
@@ -9,7 +9,7 @@ on:
       - mm/mi_mtmr.c
       - mm/mi_mtmr.h
       - mm/Kconfig
-      - mm/dagu_launch_profile.c
+      - mm/launch_profile.c
       - mm/kshrink_slabd.c
       - mm/mi_rmap_efficiency.c
       - mm/mi_rmap_efficiency.h
@@ -25,8 +25,8 @@ on:
       - tools/testing/selftests/dagu/**
       - tools/testing/selftests/Makefile
       - tools/testing/selftests/lib.mk
-      - tools/dagu_launch_profile/**
-      - .github/workflows/dagu-host-check.yml
+      - tools/launch_profile/**
+      - .github/workflows/sm8250-host-check.yml
 permissions:
   contents: read
 jobs:
@@ -35,7 +35,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
-      - name: Run dagu kselftests with ASan and UBSan
+      - name: Run representative kselftests with ASan and UBSan
         env:
           SANITIZERS: address,undefined
         run: |
@@ -46,9 +46,9 @@ jobs:
       - name: Check DLP2 profile publication
         run: |
           cc -std=gnu11 -Wall -Wextra -Werror -O1 -pthread \
-            -Itools/dagu_launch_profile -Itools/dagu_launch_profile/include \
-            tools/dagu_launch_profile/tests/profile_publish_test.c \
-            tools/dagu_launch_profile/dlp_profile_store.c \
-            tools/dagu_launch_profile/dlp_sha256.c \
+            -Itools/launch_profile -Itools/launch_profile/include \
+            tools/launch_profile/tests/profile_publish_test.c \
+            tools/launch_profile/dlp_profile_store.c \
+            tools/launch_profile/dlp_sha256.c \
             -o /tmp/dlp-profile-publish-test
           /tmp/dlp-profile-publish-test

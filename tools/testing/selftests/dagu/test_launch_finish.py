@@ -52,7 +52,7 @@ int main(void) {
 """
 with tempfile.TemporaryDirectory(prefix="dagu-launch-finish-") as tmp:
  src=Path(tmp)/"check.c"; exe=Path(tmp)/"check"
- src.write_text(prefix+function("mm/dagu_launch_profile.c","dlp_session_valid")+function("mm/dagu_launch_profile.c","dlp_complete")+main)
+ src.write_text(prefix+function("mm/launch_profile.c","dlp_session_valid")+function("mm/launch_profile.c","dlp_complete")+main)
  subprocess.run(["cc","-std=gnu11","-Wall","-Wextra","-Wno-unused-parameter","-fsanitize=undefined",str(src),"-o",str(exe)],check=True)
  subprocess.run([str(exe)],check=True,timeout=15)
 print("PASS: actual FINISH rejects expired/exited sessions without running expiry; valid/abort/failure refs balanced")

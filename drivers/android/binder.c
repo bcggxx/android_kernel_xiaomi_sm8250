@@ -5646,7 +5646,7 @@ out:
 	return ret;
 }
 
-#if defined(CONFIG_MI_MEM_ENGINE) || defined(CONFIG_DAGU_LAUNCH_PROFILE)
+#if defined(CONFIG_MI_MEM_ENGINE) || defined(CONFIG_LAUNCH_PROFILE)
 /*
  * Private C06 controller bridge. A transferred Binder driver file pins its
  * binder_proc. A strong handle pins its node; node->proc and ->is_dead are

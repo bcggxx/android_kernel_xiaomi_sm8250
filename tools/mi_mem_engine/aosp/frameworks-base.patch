@@ -7,7 +7,7 @@ index b3208bf..61bcbdf 100644
      private final ActivityTaskSupervisor mSupervisor;
      private final MetricsLogger mMetricsLogger = new MetricsLogger();
 +    private MiMemEngineLaunch mMiMemEngine;
-+    private DaguLaunchProfile mDaguLaunchProfile;
++    private LaunchProfile mLaunchProfile;
      private final Handler mLoggerHandler = FgThread.getHandler();
  
      /** All active transitions. */
@@ -15,7 +15,7 @@ index b3208bf..61bcbdf 100644
       * launched successfully.
       */
      static final class LaunchingState {
-+        DaguLaunchProfile.Session mDaguLaunchSession;
++        LaunchProfile.Session mLaunchSession;
          /**
           * The device uptime of {@link #notifyActivityLaunching}. It can be used as a key for
           * observer to identify which callbacks belong to a launch event.
@@ -31,9 +31,9 @@ index b3208bf..61bcbdf 100644
  
          if (existingInfo == null) {
              final LaunchingState launchingState = new LaunchingState();
-+            if (android.os.SystemProperties.getBoolean("sys.dagu_launch_profile.enabled", false)) {
-+                if (mDaguLaunchProfile == null) mDaguLaunchProfile = new DaguLaunchProfile(mSupervisor);
-+                launchingState.mDaguLaunchSession = mDaguLaunchProfile.pending();
++            if (android.os.SystemProperties.getBoolean("sys.launch_profile.enabled", false)) {
++                if (mLaunchProfile == null) mLaunchProfile = new LaunchProfile(mSupervisor);
++                launchingState.mLaunchSession = mLaunchProfile.pending();
 +            }
              // Only notify the observer for a new launching event.
              launchObserverNotifyIntentStarted(intent, launchingState.mStartUptimeNs);
@@ -44,8 +44,8 @@ index b3208bf..61bcbdf 100644
              // Coalesce multiple (trampoline) activities from a single sequence together.
 +            if (mMiMemEngine != null) mMiMemEngine.end(info.mMiMemEngineSession);
 +            info.mMiMemEngineSession = null;
-+            if (mDaguLaunchProfile != null) {
-+                mDaguLaunchProfile.associate(launchingState.mDaguLaunchSession, launchedActivity, processRecord);
++            if (mLaunchProfile != null) {
++                mLaunchProfile.associate(launchingState.mLaunchSession, launchedActivity, processRecord);
 +            }
              info.setLatestLaunchedActivity(launchedActivity);
 +            if (processRunning && android.os.SystemProperties.getBoolean("sys.mi_mem_engine.enabled", false)) {
@@ -59,8 +59,8 @@ index b3208bf..61bcbdf 100644
          if (DEBUG_METRICS) Slog.i(TAG, "notifyActivityLaunched successful");
          // A new launch sequence has begun. Start tracking it.
          mTransitionInfoList.add(newInfo);
-+        if (mDaguLaunchProfile != null) {
-+            mDaguLaunchProfile.associate(launchingState.mDaguLaunchSession, launchedActivity, processRecord);
++        if (mLaunchProfile != null) {
++            mLaunchProfile.associate(launchingState.mLaunchSession, launchedActivity, processRecord);
 +        }
 +        if (processRunning && android.os.SystemProperties.getBoolean("sys.mi_mem_engine.enabled", false)) {
 +            if (mMiMemEngine == null) mMiMemEngine = new MiMemEngineLaunch(mSupervisor);
@@ -84,17 +84,17 @@ index b3208bf..61bcbdf 100644
 +    // r is the same ActivityRecord token recorded by notifyActivityLaunched.
 +    // This call is inside realStartActivityLocked, after AMS verified cold attach.
 +    void notifyLaunchProfileAttached(ActivityRecord r, WindowProcessController proc) {
-+        if (mDaguLaunchProfile == null) return;
++        if (mLaunchProfile == null) return;
 +        for (int i = mTransitionInfoList.size() - 1; i >= 0; i--) {
 +            TransitionInfo info = mTransitionInfoList.get(i);
 +            if (info.mLastLaunchedActivity == r) {
-+                mDaguLaunchProfile.attached(info.mLaunchingState.mDaguLaunchSession, r, proc);
++                mLaunchProfile.attached(info.mLaunchingState.mLaunchSession, r, proc);
 +            }
 +        }
 +    }
 +
      private void abort(@NonNull LaunchingState state, String cause) {
-+        if (mDaguLaunchProfile != null) mDaguLaunchProfile.end(state.mDaguLaunchSession, false);
++        if (mLaunchProfile != null) mLaunchProfile.end(state.mLaunchSession, false);
          if (state.mAssociatedTransitionInfo != null) {
              abort(state.mAssociatedTransitionInfo, cause);
              return;
@@ -103,8 +103,8 @@ index b3208bf..61bcbdf 100644
                      + " info=" + info);
          }
 +        if (mMiMemEngine != null) mMiMemEngine.end(info.mMiMemEngineSession);
-+        if (mDaguLaunchProfile != null) {
-+            mDaguLaunchProfile.end(info.mLaunchingState.mDaguLaunchSession, !abort);
++        if (mLaunchProfile != null) {
++            mLaunchProfile.end(info.mLaunchingState.mLaunchSession, !abort);
 +        }
          info.mLaunchingState.stopTrace(abort, info);
          stopLaunchTrace(info);
@@ -130,7 +130,7 @@ index 7a710dc..06deb09 100644
  
      srcs: [
 +        "com_android_server_wm_MiMemEngineLaunch.cpp",
-+        "com_android_server_wm_DaguLaunchProfile.cpp",
++        "com_android_server_wm_LaunchProfile.cpp",
          "BroadcastRadio/JavaRef.cpp",
          "BroadcastRadio/NativeCallbackThread.cpp",
          "BroadcastRadio/BroadcastRadioService.cpp",
@@ -143,7 +143,7 @@ index 6464081..1d7b3b8 100644
  
  namespace android {
 +int register_android_server_wm_MiMemEngineLaunch(JNIEnv* env);
-+int register_android_server_wm_DaguLaunchProfile(JNIEnv* env);
++int register_android_server_wm_LaunchProfile(JNIEnv* env);
  int register_android_server_BatteryStatsService(JNIEnv* env);
  int register_android_server_ConsumerIrService(JNIEnv *env);
  int register_android_server_InputManager(JNIEnv* env);
@@ -152,7 +152,7 @@ index 6464081..1d7b3b8 100644
      register_android_server_devicepolicy_CryptoTestHelper(env);
      register_android_server_ConsumerIrService(env);
 +    if (register_android_server_wm_MiMemEngineLaunch(env) < 0) return JNI_ERR;
-+    if (register_android_server_wm_DaguLaunchProfile(env) < 0) return JNI_ERR;
++    if (register_android_server_wm_LaunchProfile(env) < 0) return JNI_ERR;
      register_android_server_BatteryStatsService(env);
      register_android_server_tv_TvUinputBridge(env);
      register_android_server_tv_TvInputHal(env);

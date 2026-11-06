@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-#ifndef DAGU_LAUNCH_PROFILE_FORMAT_H
-#define DAGU_LAUNCH_PROFILE_FORMAT_H
+#ifndef LAUNCH_PROFILE_FORMAT_H
+#define LAUNCH_PROFILE_FORMAT_H
 
 #include <stdint.h>
 

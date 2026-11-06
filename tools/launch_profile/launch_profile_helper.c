@@ -16,9 +16,9 @@
 #include <time.h>
 #include <unistd.h>
 
-#include <linux/dagu_launch_profile.h>
+#include <linux/launch_profile.h>
 
-#include "dagu_launch_profile_format.h"
+#include "launch_profile_format.h"
 #include "dlp_profile_store.h"
 #include "dlp_sha256.h"
 
@@ -27,7 +27,7 @@
 #include <cutils/properties.h>
 #endif
 
-#define DLP_PROFILE_ROOT "/data/misc/dagu_launch_profile"
+#define DLP_PROFILE_ROOT "/data/misc/launch_profile"
 
 struct wire_message {
 	struct dlp_wire_header header;
@@ -78,7 +78,7 @@ static int service_disabled(void)
 #ifdef __ANDROID__
 	char value[PROP_VALUE_MAX] = {0};
 
-	if (property_get("sys.dagu_launch_profile.enabled", value, "0") <= 0)
+	if (property_get("sys.launch_profile.enabled", value, "0") <= 0)
 		return 1;
 	return !strcmp(value, "0");
 #else
@@ -364,7 +364,7 @@ static void *replay_worker(void *unused)
 			dlp_replay_profile(DLP_PROFILE_ROOT, &message.metadata,
 					   &callbacks, &result);
 		fprintf(stderr,
-			"dagu_launch_profile: replay cookie=%llu ret=%d requested=%llu completed=%llu files=%u ranges=%u short=%u errors=%u invalid=%u budget=%u pressure=%u window=%u cancelled=%u range_limit=%u\n",
+			"launch_profile: replay cookie=%llu ret=%d requested=%llu completed=%llu files=%u ranges=%u short=%u errors=%u invalid=%u budget=%u pressure=%u window=%u cancelled=%u range_limit=%u\n",
 			(unsigned long long)job->cookie, ret,
 			(unsigned long long)result.read_requested,
 			(unsigned long long)result.read_completed,
@@ -549,13 +549,13 @@ static void *profile_worker(void *unused)
 		if (!parse_wire(job->packet, job->packet_size, &message) &&
 		    !dlp_publish_profile(DLP_PROFILE_ROOT, &message.metadata, &operations))
 			fprintf(stderr,
-				"dagu_launch_profile: published user=%u package=%.*s generation=%llu\n",
+				"launch_profile: published user=%u package=%.*s generation=%llu\n",
 				message.metadata.user_id, message.metadata.package_len,
 				message.metadata.package,
 				(unsigned long long)message.metadata.generation);
 		else
 			fprintf(stderr,
-				"dagu_launch_profile: publish rejected errno=%d\n", errno);
+				"launch_profile: publish rejected errno=%d\n", errno);
 		connection_put(job->connection);
 		if (job->snapshot_fd >= 0)
 			close(job->snapshot_fd);
@@ -747,7 +747,7 @@ static void serve(int peer)
 		goto out;
 	pthread_mutex_init(&connection->lock, NULL);
 	connection->refs = 1;
-	connection->controller = open("/dev/dagu_launch_profile",
+	connection->controller = open("/dev/launch_profile",
 				      O_RDWR | O_CLOEXEC);
 	if (connection->controller < 0)
 		goto out;
@@ -844,7 +844,7 @@ static void serve(int peer)
 					 message.header.cookie,
 					 message.header.metadata_generation))
 				fprintf(stderr,
-					"dagu_launch_profile: replay enqueue skipped\n");
+					"launch_profile: replay enqueue skipped\n");
 			break;
 		case DLP_OP_BEGIN:
 			if (received_fd < 0 || !prepared_active || kernel_active) {
@@ -1017,25 +1017,25 @@ int main(void)
 	pthread_t worker, replay;
 
 	if (dlp_sweep_profile_store(DLP_PROFILE_ROOT))
-		fprintf(stderr, "dagu_launch_profile: profile sweep failed: %s\n",
+		fprintf(stderr, "launch_profile: profile sweep failed: %s\n",
 			strerror(errno));
 	if (pthread_create(&worker, NULL, profile_worker, NULL)) {
-		fprintf(stderr, "dagu_launch_profile: cannot start profile worker\n");
+		fprintf(stderr, "launch_profile: cannot start profile worker\n");
 		return 1;
 	}
 	pthread_detach(worker);
 	if (pthread_create(&replay, NULL, replay_worker, NULL)) {
-		fprintf(stderr, "dagu_launch_profile: cannot start replay worker\n");
+		fprintf(stderr, "launch_profile: cannot start replay worker\n");
 		return 1;
 	}
 	pthread_detach(replay);
 #ifdef __ANDROID__
-	listener = android_get_control_socket("dagu_launch_profile");
+	listener = android_get_control_socket("launch_profile");
 #else
 	listener = -1;
 #endif
 	if (listener < 0 || listen(listener, 1)) {
-		fprintf(stderr, "dagu_launch_profile: missing init socket\n");
+		fprintf(stderr, "launch_profile: missing init socket\n");
 		return 1;
 	}
 	for (;;) {

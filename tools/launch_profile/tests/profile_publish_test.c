@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Exercises the production DLP2 parser and snapshot-to-profile store seam. */
 #define main helper_daemon_main
-#include "../dagu_launch_profile_helper.c"
+#include "../launch_profile_helper.c"
 #undef main
 
 #include <assert.h>

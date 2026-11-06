@@ -1,10 +1,37 @@
-# Dagu launch profile: trusted collection, publication and replay
+# Launch profile: trusted collection, publication and replay
 
-Independent default-off implementation for SM8250/dagu, Linux 4.19 and fixed
-AOSP `android-15.0.0_r1`. `CONFIG_DAGU_LAUNCH_PROFILE` and
-`sys.dagu_launch_profile.enabled` both default off. The kernel control ABI
-remains DLP1; system_server and the root helper use bounded DLP2 packets. This
+Independent default-off implementation for SM8250-family, Linux 4.19 and fixed
+AOSP `android-15.0.0_r1`. Collection and the
+`sys.launch_profile.enabled` property default off at runtime. The kernel control
+ABI remains DLP1; system_server and the root helper use bounded DLP2 packets. This
 does not claim compatibility with the unknown Xiaomi iorap2 daemon.
+
+## Interface migration
+
+The shared feature has moved from Dagu-prefixed integration names to neutral
+SM8250 names. Migrate the kernel, helper, Android integration and policy as one
+set; mixing the old and new names will not connect the helper to the controller.
+
+| Old name | New name |
+| --- | --- |
+| `CONFIG_DAGU_LAUNCH_PROFILE` | `CONFIG_LAUNCH_PROFILE` |
+| `linux/dagu_launch_profile.h` | `linux/launch_profile.h` |
+| `/dev/dagu_launch_profile` | `/dev/launch_profile` |
+| `/system/bin/dagu_launch_profile_helper`, `dagu_launch_profile` init service, and `/dev/socket/dagu_launch_profile` | `/system/bin/launch_profile_helper`, `launch_profile` init service, and `/dev/socket/launch_profile` |
+| `sys.dagu_launch_profile.enabled` | `sys.launch_profile.enabled` |
+| `/data/misc/dagu_launch_profile` | `/data/misc/launch_profile` |
+| `DaguLaunchProfile` Java/JNI adapter and Dagu SELinux types | `LaunchProfile` Java/JNI adapter and `launch_profile` SELinux types |
+
+The controller, helper binary and init service, socket, property, data path,
+SELinux labels and system_server adapter must be renamed together. The feature
+keeps its Kconfig default `n`; the common release fragment compiles it with
+`CONFIG_LAUNCH_PROFILE=y`. Collection remains disabled at runtime, the helper
+property defaults to `0`, and the init service is disabled. This interface has
+not been released as a stable ABI, so no compatibility aliases for the old names
+are provided.
+
+The DLP1/DLP2 protocol identifiers, ioctl numbers, request structures and wire
+layouts are unchanged. Existing `dlp_` implementation symbols are unchanged.
 
 ## Collection and metadata
 
@@ -60,7 +87,7 @@ reuse alone is not a valid identity. Page-aligned snapshot ranges are clipped
 to the real file EOF before storage; virtual rounded tail bytes are never
 persisted.
 
-Profiles live under `/data/misc/dagu_launch_profile/<user>/<package>/`.
+Profiles live under `/data/misc/launch_profile/<user>/<package>/`.
 `profile.bin` uses a CRC-checked little-endian schema with package metadata,
 per-file identity/digest and byte ranges. Publication writes a unique tmp
 file with `O_NOFOLLOW`, fsyncs it, atomically renames it and fsyncs the package
@@ -98,10 +125,10 @@ THP/filemap, writable donor data and donor-difference coverage.
 
 ```
 cc -std=gnu11 -Wall -Wextra -Werror -pthread \
-  -Itools/dagu_launch_profile -Itools/dagu_launch_profile/include \
-  tools/dagu_launch_profile/tests/profile_publish_test.c \
-  tools/dagu_launch_profile/dlp_profile_store.c \
-  tools/dagu_launch_profile/dlp_sha256.c -o /tmp/dlp-profile-publish-test
+  -Itools/launch_profile -Itools/launch_profile/include \
+  tools/launch_profile/tests/profile_publish_test.c \
+  tools/launch_profile/dlp_profile_store.c \
+  tools/launch_profile/dlp_sha256.c -o /tmp/dlp-profile-publish-test
 /tmp/dlp-profile-publish-test
 ```
 

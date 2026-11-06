@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 
-CHECK = Path(__file__).with_name('check_dagu_ci_paths.py')
+CHECK = Path(__file__).with_name('check_sm8250_ci_paths.py')
 
 
 class PathCoverage(unittest.TestCase):
@@ -35,7 +35,7 @@ class PathCoverage(unittest.TestCase):
 
     def test_real_manifest_rejects_each_missing_trigger(self):
         source = CHECK.resolve().parents[2]
-        required = json.loads((CHECK.parent / 'dagu-dependencies.json').read_text())
+        required = json.loads((CHECK.parent / 'sm8250-dependencies.json').read_text())
         with tempfile.TemporaryDirectory() as directory:
             workflow = Path(directory) / 'workflow.yml'
             for missing in required:

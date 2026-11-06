@@ -42,11 +42,7 @@ for arg in "$@"; do
     esac
 done
 
-DAGU_CI_FEATURE_CONFIGS=(MIHW BINDER_PRIO KSHRINK_SLABD
-    MI_RMAP_EFFICIENCY MI_MTMR MI_ASYNC_RECLAIM
-    MOON_MMAP_OPT MI_MEMPOOL MI_FAULT_AROUND MI_RECLAIM_POOL
-    MI_MEM_ENGINE DAGU_LAUNCH_PROFILE MI_SW_SYNC SYNC_FILE
-    MI_UNION_POWER)
+SHARED_FEATURE_CONFIG="arch/arm64/configs/vendor/sm8250-features.config"
 
 # ==========================================
 # Configuration & Environment
@@ -290,6 +286,7 @@ echo "==========================================="
 # ==========================================
 build_target() {
     local OS_TYPE=$1
+    local feature_config feature_option
     echo "==========================================="
     echo " Starting Kernel Compilation for ${DEVICE_NAME} (Target: $OS_TYPE)"
     echo "==========================================="
@@ -441,36 +438,31 @@ build_target() {
         scripts/kconfig/merge_config.sh -O "${OUT_DIR}/" -m "${OUT_DIR}/.config" "${DS_CONFIG_FRAG}"
     fi
 
-    if [ "$DEVICE_NAME" = "dagu" ]; then
-        scripts/config --file "${OUT_DIR}/.config" -d READAHEAD_LIMIT
-        scripts/config --file "${OUT_DIR}/.config" -d FAULT_INJECTION
+    echo "[*] Merging shared SM8250 feature configuration..."
+    scripts/kconfig/merge_config.sh -m -O "${OUT_DIR}" \
+        "${OUT_DIR}/.config" "$SHARED_FEATURE_CONFIG"
 
-        echo "[*] Enabling all implemented dagu feature code for CI coverage..."
-        for feature_option in "${DAGU_CI_FEATURE_CONFIGS[@]}"; do
-            scripts/config --file "${OUT_DIR}/.config" -e "$feature_option"
-        done
-    fi
-
-    # We always need to re-evaluate dependencies because BBG is injected unconditionally
     echo "[*] Updating config (make olddefconfig)..."
     make "${MAKE_OPTS[@]}" olddefconfig
-    if [ "$DEVICE_NAME" = "dagu" ]; then
-        for feature_option in "${DAGU_CI_FEATURE_CONFIGS[@]}"; do
-            grep -qx "CONFIG_${feature_option}=y" "${OUT_DIR}/.config" || {
-                echo "[!] CI feature config missing: ${feature_option}"
-                exit 1
-            }
-        done
-
-        if grep -qx CONFIG_READAHEAD_LIMIT=y "${OUT_DIR}/.config"; then
-            echo "[!] READAHEAD_LIMIT leaked into the default dagu build."
-            exit 1
-        fi
-        if grep -qx CONFIG_FAULT_INJECTION=y "${OUT_DIR}/.config"; then
-            echo "[!] Fault injection leaked into a non-diagnostic dagu build."
-            exit 1
-        fi
-    fi
+    # Fail if Kconfig dropped a feature because its dependencies are missing.
+    while IFS= read -r feature_config; do
+        case "$feature_config" in
+            CONFIG_*=*)
+                grep -Fxq "$feature_config" "${OUT_DIR}/.config" || {
+                    echo "[!] Shared feature config missing: $feature_config"
+                    exit 1
+                }
+                ;;
+            '# CONFIG_'*' is not set')
+                feature_option=${feature_config#\# }
+                feature_option=${feature_option% is not set}
+                if grep -Eq "^${feature_option}=[ym]$" "${OUT_DIR}/.config"; then
+                    echo "[!] Release-disabled option enabled: $feature_option"
+                    exit 1
+                fi
+                ;;
+        esac
+    done < "$SHARED_FEATURE_CONFIG"
 
     # ----------------------------------------------------
     # Compilation

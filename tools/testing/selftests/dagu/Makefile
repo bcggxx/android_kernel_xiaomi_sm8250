@@ -11,7 +11,7 @@ include ../lib.mk
 
 # Keep installed tests independent of the original source checkout.
 KERNEL_SRC := $(abspath ../../../..)
-SOURCES := mm/dagu_launch_profile.c drivers/block/zram/zram_drv.c fs/f2fs/file.c \
+SOURCES := mm/launch_profile.c drivers/block/zram/zram_drv.c fs/f2fs/file.c \
 	mm/mi_reclaim_pool.c mm/allocator_reserve.c mm/mi_fault_around.c mm/mi_async_reclaim.c mm/mi_mtmr.c mm/readahead_limit.c mm/kshrink_slabd.c mm/mi_rmap_efficiency.c mm/vmscan.c \
 	mm/moon_mmap_opt.c \
 	drivers/staging/binder_prio/binder_prio.c mm/zsmalloc.c

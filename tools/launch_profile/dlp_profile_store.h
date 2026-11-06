@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "dagu_launch_profile_format.h"
+#include "launch_profile_format.h"
 
 struct dlp_metadata_path {
 	uint8_t kind;

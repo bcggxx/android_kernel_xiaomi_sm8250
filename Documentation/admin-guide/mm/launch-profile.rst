@@ -1,14 +1,29 @@
-Dagu launch profile collection, publication and replay
+Launch profile collection, publication and replay
 ======================================================
 
 This is an independent, default-off 4.19 implementation motivated by the
 iorap2 binary collector/compiler/export evidence. It does not implement or
-claim compatibility with the donor ioctl protocol or daemon. Enable
-CONFIG_DAGU_LAUNCH_PROFILE only in an explicitly selected build; the 0600
-/dev/dagu_launch_profile controller still starts disabled. All ioctls and
+claim compatibility with the donor ioctl protocol or daemon. The shared
+release configuration compiles CONFIG_LAUNCH_PROFILE; the 0600
+/dev/launch_profile controller still starts disabled. All ioctls and
 snapshot reads require CAP_SYS_ADMIN in the initial user namespace.
 
-The fixed 64-byte request in linux/dagu_launch_profile.h has identical compat
+Interface names migrated from the previous Dagu-prefixed integration are
+``CONFIG_DAGU_LAUNCH_PROFILE`` to ``CONFIG_LAUNCH_PROFILE``,
+``linux/dagu_launch_profile.h`` to ``linux/launch_profile.h``, and
+``/dev/dagu_launch_profile`` to ``/dev/launch_profile``. The Android helper
+binary ``/system/bin/dagu_launch_profile_helper``, init service
+``dagu_launch_profile``, control socket ``/dev/socket/dagu_launch_profile``,
+``sys.dagu_launch_profile.enabled`` property,
+``/data/misc/dagu_launch_profile`` directory, SELinux types, and
+``DaguLaunchProfile`` Java/JNI adapter also move together to their
+``launch_profile`` / ``LaunchProfile`` names. The old and new components do
+not interoperate when mixed. Collection remains disabled at runtime by default.
+No compatibility aliases are provided because this interface has not been
+released as a stable ABI. DLP1/DLP2 identifiers, ioctl numbers, request
+structures, and wire layouts are unchanged.
+
+The fixed 64-byte request in linux/launch_profile.h has identical compat
 layout (aligned u64 fields). ENABLE sets a connection epoch and turns runtime
 collection on/off. BEGIN requires a monotonically increasing nonzero launch
 cookie, epoch, lease <=2000ms, and a duplicated Binder driver fd plus strong
