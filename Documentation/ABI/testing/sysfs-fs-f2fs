@@ -649,3 +649,13 @@ What:           /sys/fs/f2fs/<disk>/last_age_weight
 Date:           January 2023
 Contact:        "Ping Xiong" <xiongping1@xiaomi.com>
 Description:    When DATA SEPARATION is on, it controls the weight of last data block age.
+
+What:		/sys/fs/f2fs/<disk>/seq_file_ra_mul
+Date:		October 2026
+Contact:	Linux F2FS development mailing list <linux-f2fs-devel@lists.sourceforge.net>
+Description:	Multiplier of the backing device readahead window used by
+		POSIX_FADV_SEQUENTIAL on this filesystem. Valid values are
+		2 through 256 inclusive; the default is 2. Updates affect
+		future fadvise calls, not files already advised. Other
+		advice values retain generic VFS behavior. Increasing this
+		value can increase memory use and unnecessary I/O.

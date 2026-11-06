@@ -1840,6 +1840,8 @@ struct f2fs_sb_info {
 	unsigned int gc_segment_mode;		/* GC state for reclaimed segments */
 	unsigned int gc_reclaimed_segs[MAX_GC_MODE];	/* Reclaimed segs for each mode */
 
+	unsigned int seq_file_ra_mul;	/* sequential fadvise readahead multiplier */
+
 	int max_fragment_chunk;			/* max chunk size for block fragmentation mode */
 	int max_fragment_hole;			/* max hole size for block fragmentation mode */
 
@@ -1867,7 +1869,9 @@ struct f2fs_sb_info {
 
 #ifdef CONFIG_F2FS_IOSTAT
 	/* For app/fs IO statistics */
+	/* Period/reset serialization; byte updates only take their type lock. */
 	spinlock_t iostat_lock;
+	spinlock_t iostat_bytes_lock[NR_IO_TYPE];
 	unsigned long long rw_iostat[NR_IO_TYPE];
 	unsigned long long prev_rw_iostat[NR_IO_TYPE];
 	bool iostat_enable;
@@ -4231,6 +4235,9 @@ unsigned int f2fs_shrink_age_extent_tree(struct f2fs_sb_info *sbi,
 /*
  * sysfs.c
  */
+#define MIN_RA_MUL	2
+#define MAX_RA_MUL	256
+
 int __init f2fs_init_sysfs(void);
 void f2fs_exit_sysfs(void);
 int f2fs_register_sysfs(struct f2fs_sb_info *sbi);

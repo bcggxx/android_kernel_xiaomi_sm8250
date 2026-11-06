@@ -1,0 +1,15 @@
+# Platform integration, disabled until explicit trusted property opt-in.
+service mi_mem_engine /system/bin/mi_mem_engine_helper
+    class late_start
+    user root
+    group root
+    capabilities SYS_ADMIN
+    disabled
+    # Endpoint SID defaults to service domain; file_contexts labels the pathname.
+    socket mi_mem_engine seqpacket 0600 system system
+
+on property:sys.mi_mem_engine.enabled=1
+    start mi_mem_engine
+
+on property:sys.mi_mem_engine.enabled=0
+    stop mi_mem_engine

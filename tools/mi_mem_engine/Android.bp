@@ -1,0 +1,14 @@
+cc_library_headers {
+    name: "mi_mem_engine_uapi_headers",
+    export_include_dirs: ["include"],
+}
+
+cc_binary {
+    name: "mi_mem_engine_helper",
+    srcs: ["mi_mem_engine_helper.c"],
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+    init_rc: ["mi_mem_engine.rc"],
+    // Exact exported copy of target kernel include/uapi/linux/mi_mem_engine.h.
+    header_libs: ["mi_mem_engine_uapi_headers"],
+    shared_libs: ["libcutils"],
+}

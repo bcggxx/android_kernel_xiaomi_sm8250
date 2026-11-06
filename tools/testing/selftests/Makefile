@@ -7,6 +7,7 @@ TARGETS += cgroup
 TARGETS += clone3
 TARGETS += cpufreq
 TARGETS += cpu-hotplug
+TARGETS += dagu
 TARGETS += efivarfs
 TARGETS += exec
 TARGETS += filesystems

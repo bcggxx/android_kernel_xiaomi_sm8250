@@ -12,3 +12,7 @@ makefiles.txt
 	- developer information for linux kernel makefiles
 modules.txt
 	- how to build modules and to install them
+sm8250-features.rst
+	- shared feature configuration and release delivery for supported devices
+release-identity.rst
+	- neutral kernel release suffix and build identity for supported devices

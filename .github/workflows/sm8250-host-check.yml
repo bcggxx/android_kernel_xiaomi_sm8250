@@ -1,0 +1,54 @@
+name: SM8250 host checks
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - drivers/block/zram/zram_drv.c
+      - drivers/block/zram/zram_drv.h
+      - fs/f2fs/file.c
+      - mm/mi_mtmr.c
+      - mm/mi_mtmr.h
+      - mm/Kconfig
+      - mm/launch_profile.c
+      - mm/kshrink_slabd.c
+      - mm/mi_rmap_efficiency.c
+      - mm/mi_rmap_efficiency.h
+      - mm/readahead_limit.c
+      - mm/readahead.c
+      - mm/filemap.c
+      - mm/internal.h
+      - include/linux/readahead_limit.h
+      - include/trace/events/filemap.h
+      - mm/vmscan.c
+      - mm/zsmalloc.c
+      - drivers/staging/binder_prio/binder_prio.c
+      - tools/testing/selftests/dagu/**
+      - tools/testing/selftests/Makefile
+      - tools/testing/selftests/lib.mk
+      - tools/launch_profile/**
+      - .github/workflows/sm8250-host-check.yml
+permissions:
+  contents: read
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run representative kselftests with ASan and UBSan
+        env:
+          SANITIZERS: address,undefined
+        run: |
+          set -o pipefail
+          make -C tools/testing/selftests TARGETS=dagu run_tests | tee dagu-tests.log
+          # This kernel's legacy TAP runner does not propagate test failures.
+          ! grep -Eq '^not ok .*\[FAIL\]' dagu-tests.log
+      - name: Check DLP2 profile publication
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Werror -O1 -pthread \
+            -Itools/launch_profile -Itools/launch_profile/include \
+            tools/launch_profile/tests/profile_publish_test.c \
+            tools/launch_profile/dlp_profile_store.c \
+            tools/launch_profile/dlp_sha256.c \
+            -o /tmp/dlp-profile-publish-test
+          /tmp/dlp-profile-publish-test

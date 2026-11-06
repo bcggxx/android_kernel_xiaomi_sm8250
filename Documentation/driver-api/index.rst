@@ -15,12 +15,14 @@ available subsections can be seen below.
    :maxdepth: 2
 
    basics
+   binder-priority
    infrastructure
    pm/index
    clk
    device-io
    device_connection
    dma-buf
+   mi-sw-sync
    device_link
    message-based
    sound

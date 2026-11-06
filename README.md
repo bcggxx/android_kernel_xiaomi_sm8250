@@ -217,3 +217,42 @@ Join ApartTUSITU's QQ Group: [700675046](https://qm.qq.com/q/Md7nXA3Toa)。
       ```
 
    Additionally, `buildall.sh` can build for all supported devices at once.  
+
+
+## Optional official Binder main-thread rules
+
+With CONFIG_BINDER_PRIO, `binder_prio.extra_main_threads` is a separate boolean
+module parameter, default false. Its runtime control is
+`/sys/module/binder_prio/parameters/extra_main_threads` (root write, mode 0644).
+The standard kernel boolean parser rejects invalid values without changing the
+setting. This change does not enable the parameter or alter the defconfig.
+
+When enabled, only exact task comm values `rsonalassistant` and `.globallauncher`
+on main threads (pid == tgid) join the existing graphics policy. Names come from
+MiCode/Xiaomi_Kernel_OpenSource commit
+[`56295df675b92553f83bbf333f88b0c6ee8fa7bc` binder_prio.c](https://github.com/MiCode/Xiaomi_Kernel_OpenSource/blob/56295df675b92553f83bbf333f88b0c6ee8fa7bc/drivers/staging/binder_prio/binder_prio.c),
+a GPL module. These comm representations are not expanded to package names.
+The target ROM has not been shown to run either name or send matching requests.
+
+Both rules use the existing synchronous FIFO/RR sender transaction path, node
+inherit_rt check, sender task reference and RCU protection, receiver CAP_SYS_NICE
+or RLIMIT_RTPRIO >= 1, and preservation of equal/stronger RT priority. A qualifying
+request uses the existing FIFO1 plus RESET_ON_FORK scheduler consumer. There is
+no extra saved task state; Binder core remains responsible for normal, error and
+idle restoration. A scheduler failure creates no extension success state.
+Disabling the parameter affects subsequent decisions; a callback already making
+its decision can complete and in-flight transactions rely on core restoration.
+It does not immediately revoke all in-flight boosts. Module unload unregisters
+and synchronizes the hook; it likewise relies on core restoration.
+
+This is a safety adaptation, not a full equivalent of the source module. Exact
+matching replaces source prefixes, persistent SurfaceFlinger default promotion
+is omitted, and the existing cameraserver rule remains broader than the source
+C3Dev-/-ReqQ rule. The legacy list works with either parameter value. QoS/MVP/SCX
+binary findings are separate mechanisms and are not implemented by these names.
+
+The focused host regression extracts the actual classifier and scheduler-request
+path and checks default-off, on/off transitions, both exact main threads and
+shared safety gates. It does not prove real Binder IPC, nested/error/exit recovery,
+RCU concurrency or performance. Real ROM transaction and recovery acceptance
+remains pending; no device validation or performance claim accompanies this change.

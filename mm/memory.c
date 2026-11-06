@@ -38,8 +38,10 @@
  * Aug/Sep 2004 Changed to four level page tables (Andi Kleen)
  */
 
+#include <linux/launch_profile.h>
 #include <linux/kernel_stat.h>
 #include <linux/mm.h>
+#include <linux/mi_fault_around.h>
 #include <linux/sched/mm.h>
 #include <linux/sched/coredump.h>
 #include <linux/sched/numa_balancing.h>
@@ -3474,6 +3476,10 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 		page_add_file_rmap(page, false);
 	}
 	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, entry);
+	/* Ordinary file PTE only; existing PTE, COW and THP are excluded. */
+	if (vma->vm_file && !(write && !(vmf->vma_flags & VM_SHARED)))
+		dlp_collect(vma->vm_file, ((u64)vma->vm_pgoff << PAGE_SHIFT) +
+			    (vmf->address - vma->vm_start), PAGE_SIZE);
 
 	/* no need to invalidate: a not-present page won't be cached */
 	update_mmu_cache(vma, vmf->address, vmf->pte);
@@ -3660,7 +3666,8 @@ static vm_fault_t do_read_fault(struct vm_fault *vmf)
 	 * something).
 	 */
 	if (vma->vm_ops->map_pages && fault_around_bytes >> PAGE_SHIFT > 1) {
-		if (likely(!userfaultfd_minor(vmf->vma))) {
+		if (likely(!userfaultfd_minor(vmf->vma)) &&
+		    mi_fault_around_allowed()) {
 			ret = do_fault_around(vmf);
 			if (ret)
 				return ret;

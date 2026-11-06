@@ -9,6 +9,7 @@
  * most "normal" filesystems (but you don't /have/ to use this:
  * the NFS filesystem used to do this differently, for example)
  */
+#include <linux/launch_profile.h>
 #include <linux/export.h>
 #include <linux/compiler.h>
 #include <linux/dax.h>
@@ -39,6 +40,7 @@
 #include <linux/delayacct.h>
 #include <linux/psi.h>
 #include "internal.h"
+#include "mi_mtmr.h"
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/filemap.h>
@@ -916,6 +918,7 @@ int add_to_page_cache_lru(struct page *page, struct address_space *mapping,
 		if (!(gfp_mask & __GFP_WRITE) && shadow)
 			workingset_refault(page, shadow);
 		lru_cache_add(page);
+		mi_mtmr_ra_inserted(page);
 	}
 	return ret;
 }
@@ -2170,17 +2173,33 @@ find_page:
 		if (!page) {
 			if (iocb->ki_flags & IOCB_NOWAIT)
 				goto would_block;
-			page_cache_sync_readahead(mapping,
-					ra, filp,
-					index, last_index - index);
+			trace_filemap_readahead_request(mapping, FILEMAP_RA_READ_SYNC,
+						 index, last_index - index);
+#ifdef CONFIG_READAHEAD_LIMIT
+			page_cache_sync_readahead_ctx(mapping, ra, filp,
+				index, last_index - index, &(struct ra_context) {
+					index, last_index - index, FILEMAP_RA_READ_SYNC
+				});
+#else
+			page_cache_sync_readahead(mapping, ra, filp,
+						 index, last_index - index);
+#endif
 			page = find_get_page(mapping, index);
 			if (unlikely(page == NULL))
 				goto no_cached_page;
 		}
 		if (PageReadahead(page)) {
-			page_cache_async_readahead(mapping,
-					ra, filp, page,
-					index, last_index - index);
+			trace_filemap_readahead_request(mapping, FILEMAP_RA_READ_ASYNC,
+						 index, last_index - index);
+#ifdef CONFIG_READAHEAD_LIMIT
+			page_cache_async_readahead_ctx(mapping, ra, filp, page,
+				index, last_index - index, &(struct ra_context) {
+					index, last_index - index, FILEMAP_RA_READ_ASYNC
+				});
+#else
+			page_cache_async_readahead(mapping, ra, filp, page,
+						  index, last_index - index);
+#endif
 		}
 		if (!PageUptodate(page)) {
 			if (iocb->ki_flags & IOCB_NOWAIT) {
@@ -2264,6 +2283,7 @@ page_ok:
 		 */
 
 		ret = copy_page_to_iter(page, offset, nr, iter);
+		dlp_collect(filp, ((u64)index << PAGE_SHIFT) + offset, ret);
 		offset += ret;
 		index += offset >> PAGE_SHIFT;
 		offset &= ~PAGE_MASK;
@@ -2515,8 +2535,16 @@ static struct file *do_sync_mmap_readahead(struct vm_fault *vmf)
 
 	if (vmf->vma->vm_flags & VM_SEQ_READ) {
 		fpin = maybe_unlock_mmap_for_io(vmf, fpin);
-		page_cache_sync_readahead(mapping, ra, file, offset,
-					  ra->ra_pages);
+		trace_filemap_readahead_request(mapping, FILEMAP_RA_MMAP_SEQ,
+						 offset, 1);
+#ifdef CONFIG_READAHEAD_LIMIT
+		page_cache_sync_readahead_ctx(mapping, ra, file, offset,
+			ra->ra_pages, &(struct ra_context) {
+				offset, 1, FILEMAP_RA_MMAP_SEQ
+			});
+#else
+		page_cache_sync_readahead(mapping, ra, file, offset, ra->ra_pages);
+#endif
 		return fpin;
 	}
 
@@ -2538,7 +2566,15 @@ static struct file *do_sync_mmap_readahead(struct vm_fault *vmf)
 	ra->start = max_t(long, 0, offset - ra->ra_pages / 2);
 	ra->size = ra->ra_pages;
 	ra->async_size = ra->ra_pages / 4;
+	trace_filemap_readahead_request(mapping, FILEMAP_RA_MMAP_READAROUND,
+					 offset, 1);
+#ifdef CONFIG_READAHEAD_LIMIT
+	ra_submit_ctx(ra, mapping, file, &(struct ra_context) {
+		offset, 1, FILEMAP_RA_MMAP_READAROUND
+	});
+#else
 	ra_submit(ra, mapping, file);
+#endif
 	return fpin;
 }
 
@@ -2563,8 +2599,17 @@ static struct file *do_async_mmap_readahead(struct vm_fault *vmf,
 		ra->mmap_miss--;
 	if (PageReadahead(page)) {
 		fpin = maybe_unlock_mmap_for_io(vmf, fpin);
-		page_cache_async_readahead(mapping, ra, file,
-					   page, offset, ra->ra_pages);
+		trace_filemap_readahead_request(mapping, FILEMAP_RA_MMAP_ASYNC,
+						 offset, 1);
+#ifdef CONFIG_READAHEAD_LIMIT
+		page_cache_async_readahead_ctx(mapping, ra, file, page, offset,
+			ra->ra_pages, &(struct ra_context) {
+				offset, 1, FILEMAP_RA_MMAP_ASYNC
+			});
+#else
+		page_cache_async_readahead(mapping, ra, file, page, offset,
+					   ra->ra_pages);
+#endif
 	}
 	return fpin;
 }
