@@ -3,7 +3,7 @@ Launch profile collection, publication and replay
 
 This is an independent, default-off 4.19 implementation motivated by the
 iorap2 binary collector/compiler/export evidence. It does not implement or
-claim compatibility with the donor ioctl protocol or daemon. The shared
+claim compatibility with the donor ioctl protocol or daemon. The shared MIUI
 release configuration compiles CONFIG_LAUNCH_PROFILE; the 0600
 /dev/launch_profile controller still starts disabled. All ioctls and
 snapshot reads require CAP_SYS_ADMIN in the initial user namespace.

@@ -24,7 +24,7 @@ set; mixing the old and new names will not connect the helper to the controller.
 
 The controller, helper binary and init service, socket, property, data path,
 SELinux labels and system_server adapter must be renamed together. The feature
-keeps its Kconfig default `n`; the common release fragment compiles it with
+keeps its Kconfig default `n`; the common MIUI release fragment compiles it with
 `CONFIG_LAUNCH_PROFILE=y`. Collection remains disabled at runtime, the helper
 property defaults to `0`, and the init service is disabled. This interface has
 not been released as a stable ABI, so no compatibility aliases for the old names

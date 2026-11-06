@@ -42,7 +42,7 @@ for arg in "$@"; do
     esac
 done
 
-SHARED_FEATURE_CONFIG="arch/arm64/configs/vendor/sm8250-features.config"
+MIUI_FEATURE_CONFIG="arch/arm64/configs/vendor/sm8250-miui-features.config"
 
 # ==========================================
 # Configuration & Environment
@@ -438,31 +438,35 @@ build_target() {
         scripts/kconfig/merge_config.sh -O "${OUT_DIR}/" -m "${OUT_DIR}/.config" "${DS_CONFIG_FRAG}"
     fi
 
-    echo "[*] Merging shared SM8250 feature configuration..."
-    scripts/kconfig/merge_config.sh -m -O "${OUT_DIR}" \
-        "${OUT_DIR}/.config" "$SHARED_FEATURE_CONFIG"
+    if [ "$OS_TYPE" == "miui" ]; then
+        echo "[*] Merging shared SM8250 MIUI feature configuration..."
+        scripts/kconfig/merge_config.sh -m -O "${OUT_DIR}" \
+            "${OUT_DIR}/.config" "$MIUI_FEATURE_CONFIG"
+    fi
 
     echo "[*] Updating config (make olddefconfig)..."
     make "${MAKE_OPTS[@]}" olddefconfig
-    # Fail if Kconfig dropped a feature because its dependencies are missing.
-    while IFS= read -r feature_config; do
-        case "$feature_config" in
-            CONFIG_*=*)
-                grep -Fxq "$feature_config" "${OUT_DIR}/.config" || {
-                    echo "[!] Shared feature config missing: $feature_config"
-                    exit 1
-                }
-                ;;
-            '# CONFIG_'*' is not set')
-                feature_option=${feature_config#\# }
-                feature_option=${feature_option% is not set}
-                if grep -Eq "^${feature_option}=[ym]$" "${OUT_DIR}/.config"; then
-                    echo "[!] Release-disabled option enabled: $feature_option"
-                    exit 1
-                fi
-                ;;
-        esac
-    done < "$SHARED_FEATURE_CONFIG"
+    if [ "$OS_TYPE" == "miui" ]; then
+        # Fail if Kconfig dropped a feature because its dependencies are missing.
+        while IFS= read -r feature_config; do
+            case "$feature_config" in
+                CONFIG_*=*)
+                    grep -Fxq "$feature_config" "${OUT_DIR}/.config" || {
+                        echo "[!] Shared feature config missing: $feature_config"
+                        exit 1
+                    }
+                    ;;
+                '# CONFIG_'*' is not set')
+                    feature_option=${feature_config#\# }
+                    feature_option=${feature_option% is not set}
+                    if grep -Eq "^${feature_option}=[ym]$" "${OUT_DIR}/.config"; then
+                        echo "[!] Release-disabled option enabled: $feature_option"
+                        exit 1
+                    fi
+                    ;;
+            esac
+        done < "$MIUI_FEATURE_CONFIG"
+    fi
 
     # ----------------------------------------------------
     # Compilation

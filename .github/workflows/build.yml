@@ -100,7 +100,7 @@ jobs:
         echo "Executing command: ./build_kernel.sh $ARGS"
         ./build_kernel.sh $ARGS
 
-    # Shared feature code is built for every device by build_kernel.sh.
+    # Shared MIUI feature code is built for every device on the MIUI path.
     # Runtime opt-in policies keep their existing defaults.
     - name: Upload Flashable ZIP
       uses: actions/upload-artifact@v7
