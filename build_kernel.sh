@@ -53,6 +53,8 @@ TOOLCHAIN_BIN="$HOME/zyc-clang/bin"
 export PATH="${TOOLCHAIN_BIN}:${PATH}"
 export ARCH="arm64"
 export SUBARCH="arm64"
+export KBUILD_BUILD_USER="${KBUILD_BUILD_USER:-android-build}"
+export KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST:-localhost}"
 
 # ccache Setup
 export CCACHE_DIR="$HOME/.cache/ccache_mikernel"
@@ -298,6 +300,7 @@ build_target() {
         O="${OUT_DIR}"
         ARCH="${ARCH}"
         SUBARCH="${SUBARCH}"
+        LOCALVERSION=
         LLVM=1
         LLVM_IAS=1
         CC="ccache clang"
