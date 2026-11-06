@@ -137,3 +137,11 @@ kernel/configs/android-*.cfg
 
 out_miui/
 out_aosp/
+
+# Local agent configuration and skills
+AGENTS.md
+CLAUDE.md
+/.agents/
+/.codex/
+/docs/agents/
+/.scratch/

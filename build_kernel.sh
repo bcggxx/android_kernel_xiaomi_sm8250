@@ -48,9 +48,28 @@ MIUI_FEATURE_CONFIG="arch/arm64/configs/vendor/sm8250-miui-features.config"
 # Configuration & Environment
 # ==========================================
 KERNEL_DIR="$(pwd)"
-TOOLCHAIN_BIN="$HOME/zyc-clang/bin"
+if [ -z "${TOOLCHAIN_BIN:-}" ]; then
+    if [ -x "$HOME/zyc-clang/bin/clang" ]; then
+        TOOLCHAIN_BIN="$HOME/zyc-clang/bin"
+    else
+        # Ubuntu packages contain native host binaries and ARM cross backends.
+        TOOLCHAIN_BIN="/usr/lib/llvm-19/bin"
+    fi
+fi
 
 export PATH="${TOOLCHAIN_BIN}:${PATH}"
+for tool in clang clang++ ld.lld llvm-ar llvm-nm llvm-objcopy llvm-objdump \
+    llvm-readelf llvm-size llvm-strip aarch64-linux-gnu-as arm-linux-gnueabi-as; do
+    if ! command -v "$tool" >/dev/null; then
+        echo "[!] Missing build tool: $tool (TOOLCHAIN_BIN=$TOOLCHAIN_BIN)"
+        exit 1
+    fi
+done
+# Execute before any remote setup or source/output modification. A toolchain
+# copied from another host architecture must fail here, not midway through build.
+clang --version
+clang++ --version >/dev/null
+ld.lld --version
 export ARCH="arm64"
 export SUBARCH="arm64"
 export KBUILD_BUILD_USER="${KBUILD_BUILD_USER:-android-build}"
