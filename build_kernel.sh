@@ -42,15 +42,38 @@ for arg in "$@"; do
     esac
 done
 
+MIUI_FEATURE_CONFIG="arch/arm64/configs/vendor/sm8250-miui-features.config"
+
 # ==========================================
 # Configuration & Environment
 # ==========================================
 KERNEL_DIR="$(pwd)"
-TOOLCHAIN_BIN="$HOME/zyc-clang/bin"
+if [ -z "${TOOLCHAIN_BIN:-}" ]; then
+    if [ -x "$HOME/zyc-clang/bin/clang" ]; then
+        TOOLCHAIN_BIN="$HOME/zyc-clang/bin"
+    else
+        # Ubuntu packages contain native host binaries and ARM cross backends.
+        TOOLCHAIN_BIN="/usr/lib/llvm-19/bin"
+    fi
+fi
 
 export PATH="${TOOLCHAIN_BIN}:${PATH}"
+for tool in clang clang++ ld.lld llvm-ar llvm-nm llvm-objcopy llvm-objdump \
+    llvm-readelf llvm-size llvm-strip aarch64-linux-gnu-as arm-linux-gnueabi-as; do
+    if ! command -v "$tool" >/dev/null; then
+        echo "[!] Missing build tool: $tool (TOOLCHAIN_BIN=$TOOLCHAIN_BIN)"
+        exit 1
+    fi
+done
+# Execute before any remote setup or source/output modification. A toolchain
+# copied from another host architecture must fail here, not midway through build.
+clang --version
+clang++ --version >/dev/null
+ld.lld --version
 export ARCH="arm64"
 export SUBARCH="arm64"
+export KBUILD_BUILD_USER="${KBUILD_BUILD_USER:-android-build}"
+export KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST:-localhost}"
 
 # ccache Setup
 export CCACHE_DIR="$HOME/.cache/ccache_mikernel"
@@ -78,8 +101,31 @@ if [ "$ENABLE_KSU" -eq 1 ]; then
     echo "==========================================="
     echo " [*] Initializing KernelSU (ReSukiSU) Setup"
     echo "==========================================="
-    echo "[*] Downloading and running ReSukiSU remote setup script..."
-    curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+    # Match the successful 2026-10-02 dagu MIUI/SUSFS/DroidSpaces build.
+    # Moving main now requires a newer SUSFS kernel API.
+    RESUKISU_REF="${RESUKISU_REF:-34210a4dec297cb48ce4bfa1c5ba50a2f7d22641}"
+    if [[ ! "$RESUKISU_REF" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "[!] RESUKISU_REF must be a full commit SHA."
+        exit 1
+    fi
+    echo "[*] Setting up ReSukiSU at $RESUKISU_REF..."
+    KSU_SETUP_SCRIPT=$(mktemp)
+    if ! curl -fLSs --connect-timeout 15 --max-time 120 --retry 2 \
+        "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/$RESUKISU_REF/kernel/setup.sh" \
+        -o "$KSU_SETUP_SCRIPT"; then
+        rm -f "$KSU_SETUP_SCRIPT"
+        exit 1
+    fi
+    if ! GIT_TERMINAL_PROMPT=0 timeout -k 5s 300s \
+        bash "$KSU_SETUP_SCRIPT" "$RESUKISU_REF"; then
+        rm -f "$KSU_SETUP_SCRIPT"
+        exit 1
+    fi
+    rm -f "$KSU_SETUP_SCRIPT"
+    if [[ "$(git -C "$KERNEL_DIR/KernelSU" rev-parse HEAD)" != "$RESUKISU_REF" ]]; then
+        echo "[!] KernelSU checkout does not match the requested commit."
+        exit 1
+    fi
     echo "[+] KernelSU setup finished."
 fi
 
@@ -261,6 +307,7 @@ echo "==========================================="
 # ==========================================
 build_target() {
     local OS_TYPE=$1
+    local feature_config feature_option
     echo "==========================================="
     echo " Starting Kernel Compilation for ${DEVICE_NAME} (Target: $OS_TYPE)"
     echo "==========================================="
@@ -272,6 +319,7 @@ build_target() {
         O="${OUT_DIR}"
         ARCH="${ARCH}"
         SUBARCH="${SUBARCH}"
+        LOCALVERSION=
         LLVM=1
         LLVM_IAS=1
         CC="ccache clang"
@@ -412,9 +460,35 @@ build_target() {
         scripts/kconfig/merge_config.sh -O "${OUT_DIR}/" -m "${OUT_DIR}/.config" "${DS_CONFIG_FRAG}"
     fi
 
-    # We always need to re-evaluate dependencies because BBG is injected unconditionally
+    if [ "$OS_TYPE" == "miui" ]; then
+        echo "[*] Merging shared SM8250 MIUI feature configuration..."
+        scripts/kconfig/merge_config.sh -m -O "${OUT_DIR}" \
+            "${OUT_DIR}/.config" "$MIUI_FEATURE_CONFIG"
+    fi
+
     echo "[*] Updating config (make olddefconfig)..."
     make "${MAKE_OPTS[@]}" olddefconfig
+    if [ "$OS_TYPE" == "miui" ]; then
+        # Fail if Kconfig dropped a feature because its dependencies are missing.
+        while IFS= read -r feature_config; do
+            case "$feature_config" in
+                CONFIG_*=*)
+                    grep -Fxq "$feature_config" "${OUT_DIR}/.config" || {
+                        echo "[!] Shared feature config missing: $feature_config"
+                        exit 1
+                    }
+                    ;;
+                '# CONFIG_'*' is not set')
+                    feature_option=${feature_config#\# }
+                    feature_option=${feature_option% is not set}
+                    if grep -Eq "^${feature_option}=[ym]$" "${OUT_DIR}/.config"; then
+                        echo "[!] Release-disabled option enabled: $feature_option"
+                        exit 1
+                    fi
+                    ;;
+            esac
+        done < "$MIUI_FEATURE_CONFIG"
+    fi
 
     # ----------------------------------------------------
     # Compilation

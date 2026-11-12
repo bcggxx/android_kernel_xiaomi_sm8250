@@ -18,69 +18,115 @@
 static struct kmem_cache *bio_iostat_ctx_cache;
 static mempool_t *bio_iostat_ctx_pool;
 
+/* The app total, direct and derived buffered counters share one lock. */
+static unsigned int iostat_lock_index(enum iostat_type type)
+{
+	switch (type) {
+	case APP_BUFFERED_IO:
+	case APP_DIRECT_IO:
+		return APP_WRITE_IO;
+	case APP_BUFFERED_READ_IO:
+	case APP_DIRECT_READ_IO:
+		return APP_READ_IO;
+	default:
+		return type;
+	}
+}
+
+/* Called under iostat_lock, never while holding a byte counter lock. */
+static void snapshot_iostat(struct f2fs_sb_info *sbi,
+			   unsigned long long *snapshot, bool reset)
+{
+	int i;
+
+	for (i = 0; i < NR_IO_TYPE; i++) {
+		if (iostat_lock_index(i) != i)
+			continue;
+		spin_lock(&sbi->iostat_bytes_lock[i]);
+		snapshot[i] = sbi->rw_iostat[i];
+		if (reset)
+			sbi->rw_iostat[i] = 0;
+		if (i == APP_WRITE_IO || i == APP_READ_IO) {
+			/* The direct/buffered entries precede the total. */
+			snapshot[i - 1] = sbi->rw_iostat[i - 1];
+			snapshot[i - 2] = sbi->rw_iostat[i - 2];
+			if (reset) {
+				sbi->rw_iostat[i - 1] = 0;
+				sbi->rw_iostat[i - 2] = 0;
+			}
+		}
+		spin_unlock(&sbi->iostat_bytes_lock[i]);
+	}
+}
+
 int __maybe_unused iostat_info_seq_show(struct seq_file *seq, void *offset)
 {
 	struct super_block *sb = seq->private;
 	struct f2fs_sb_info *sbi = F2FS_SB(sb);
 	time64_t now = ktime_get_real_seconds();
+	unsigned long long snapshot[NR_IO_TYPE];
 
 	if (!sbi->iostat_enable)
 		return 0;
+
+	spin_lock(&sbi->iostat_lock);
+	snapshot_iostat(sbi, snapshot, false);
+	spin_unlock(&sbi->iostat_lock);
 
 	seq_printf(seq, "time:		%-16llu\n", now);
 
 	/* print app write IOs */
 	seq_puts(seq, "[WRITE]\n");
 	seq_printf(seq, "app buffered:	%-16llu\n",
-				sbi->rw_iostat[APP_BUFFERED_IO]);
+				snapshot[APP_BUFFERED_IO]);
 	seq_printf(seq, "app direct:	%-16llu\n",
-				sbi->rw_iostat[APP_DIRECT_IO]);
+				snapshot[APP_DIRECT_IO]);
 	seq_printf(seq, "app mapped:	%-16llu\n",
-				sbi->rw_iostat[APP_MAPPED_IO]);
+				snapshot[APP_MAPPED_IO]);
 
 	/* print fs write IOs */
 	seq_printf(seq, "fs data:	%-16llu\n",
-				sbi->rw_iostat[FS_DATA_IO]);
+				snapshot[FS_DATA_IO]);
 	seq_printf(seq, "fs node:	%-16llu\n",
-				sbi->rw_iostat[FS_NODE_IO]);
+				snapshot[FS_NODE_IO]);
 	seq_printf(seq, "fs meta:	%-16llu\n",
-				sbi->rw_iostat[FS_META_IO]);
+				snapshot[FS_META_IO]);
 	seq_printf(seq, "fs gc data:	%-16llu\n",
-				sbi->rw_iostat[FS_GC_DATA_IO]);
+				snapshot[FS_GC_DATA_IO]);
 	seq_printf(seq, "fs gc node:	%-16llu\n",
-				sbi->rw_iostat[FS_GC_NODE_IO]);
+				snapshot[FS_GC_NODE_IO]);
 	seq_printf(seq, "fs cp data:	%-16llu\n",
-				sbi->rw_iostat[FS_CP_DATA_IO]);
+				snapshot[FS_CP_DATA_IO]);
 	seq_printf(seq, "fs cp node:	%-16llu\n",
-				sbi->rw_iostat[FS_CP_NODE_IO]);
+				snapshot[FS_CP_NODE_IO]);
 	seq_printf(seq, "fs cp meta:	%-16llu\n",
-				sbi->rw_iostat[FS_CP_META_IO]);
+				snapshot[FS_CP_META_IO]);
 
 	/* print app read IOs */
 	seq_puts(seq, "[READ]\n");
 	seq_printf(seq, "app buffered:	%-16llu\n",
-				sbi->rw_iostat[APP_BUFFERED_READ_IO]);
+				snapshot[APP_BUFFERED_READ_IO]);
 	seq_printf(seq, "app direct:	%-16llu\n",
-				sbi->rw_iostat[APP_DIRECT_READ_IO]);
+				snapshot[APP_DIRECT_READ_IO]);
 	seq_printf(seq, "app mapped:	%-16llu\n",
-				sbi->rw_iostat[APP_MAPPED_READ_IO]);
+				snapshot[APP_MAPPED_READ_IO]);
 
 	/* print fs read IOs */
 	seq_printf(seq, "fs data:	%-16llu\n",
-				sbi->rw_iostat[FS_DATA_READ_IO]);
+				snapshot[FS_DATA_READ_IO]);
 	seq_printf(seq, "fs gc data:	%-16llu\n",
-				sbi->rw_iostat[FS_GDATA_READ_IO]);
+				snapshot[FS_GDATA_READ_IO]);
 	seq_printf(seq, "fs compr_data:	%-16llu\n",
-				sbi->rw_iostat[FS_CDATA_READ_IO]);
+				snapshot[FS_CDATA_READ_IO]);
 	seq_printf(seq, "fs node:	%-16llu\n",
-				sbi->rw_iostat[FS_NODE_READ_IO]);
+				snapshot[FS_NODE_READ_IO]);
 	seq_printf(seq, "fs meta:	%-16llu\n",
-				sbi->rw_iostat[FS_META_READ_IO]);
+				snapshot[FS_META_READ_IO]);
 
 	/* print other IOs */
 	seq_puts(seq, "[OTHER]\n");
 	seq_printf(seq, "fs discard:	%-16llu\n",
-				sbi->rw_iostat[FS_DISCARD]);
+				snapshot[FS_DISCARD]);
 
 	return 0;
 }
@@ -114,24 +160,27 @@ static inline void __record_iostat_latency(struct f2fs_sb_info *sbi)
 static inline void f2fs_record_iostat(struct f2fs_sb_info *sbi)
 {
 	unsigned long long iostat_diff[NR_IO_TYPE];
+	unsigned long long snapshot[NR_IO_TYPE];
 	int i;
 
-	if (time_is_after_jiffies(sbi->iostat_next_period))
+	if (time_is_after_jiffies(READ_ONCE(sbi->iostat_next_period)))
 		return;
 
 	/* Need double check under the lock */
 	spin_lock(&sbi->iostat_lock);
-	if (time_is_after_jiffies(sbi->iostat_next_period)) {
+	if (time_is_after_jiffies(READ_ONCE(sbi->iostat_next_period))) {
 		spin_unlock(&sbi->iostat_lock);
 		return;
 	}
-	sbi->iostat_next_period = jiffies +
-				msecs_to_jiffies(sbi->iostat_period_ms);
+	WRITE_ONCE(sbi->iostat_next_period, jiffies +
+			msecs_to_jiffies(sbi->iostat_period_ms));
+
+	snapshot_iostat(sbi, snapshot, false);
 
 	for (i = 0; i < NR_IO_TYPE; i++) {
-		iostat_diff[i] = sbi->rw_iostat[i] -
+		iostat_diff[i] = snapshot[i] -
 				sbi->prev_rw_iostat[i];
-		sbi->prev_rw_iostat[i] = sbi->rw_iostat[i];
+		sbi->prev_rw_iostat[i] = snapshot[i];
 	}
 	spin_unlock(&sbi->iostat_lock);
 
@@ -143,13 +192,11 @@ static inline void f2fs_record_iostat(struct f2fs_sb_info *sbi)
 void f2fs_reset_iostat(struct f2fs_sb_info *sbi)
 {
 	struct iostat_lat_info *io_lat = sbi->iostat_io_lat;
-	int i;
+	unsigned long long snapshot[NR_IO_TYPE];
 
 	spin_lock(&sbi->iostat_lock);
-	for (i = 0; i < NR_IO_TYPE; i++) {
-		sbi->rw_iostat[i] = 0;
-		sbi->prev_rw_iostat[i] = 0;
-	}
+	snapshot_iostat(sbi, snapshot, true);
+	memset(sbi->prev_rw_iostat, 0, sizeof(sbi->prev_rw_iostat));
 	spin_unlock(&sbi->iostat_lock);
 
 	spin_lock_irq(&sbi->iostat_lat_lock);
@@ -160,10 +207,12 @@ void f2fs_reset_iostat(struct f2fs_sb_info *sbi)
 void f2fs_update_iostat(struct f2fs_sb_info *sbi,
 			enum iostat_type type, unsigned long long io_bytes)
 {
-	if (!sbi->iostat_enable)
+	unsigned int lock_index = iostat_lock_index(type);
+
+	if (!READ_ONCE(sbi->iostat_enable))
 		return;
 
-	spin_lock(&sbi->iostat_lock);
+	spin_lock(&sbi->iostat_bytes_lock[lock_index]);
 	sbi->rw_iostat[type] += io_bytes;
 
 	if (type == APP_WRITE_IO || type == APP_DIRECT_IO)
@@ -175,7 +224,7 @@ void f2fs_update_iostat(struct f2fs_sb_info *sbi,
 		sbi->rw_iostat[APP_BUFFERED_READ_IO] =
 			sbi->rw_iostat[APP_READ_IO] -
 			sbi->rw_iostat[APP_DIRECT_READ_IO];
-	spin_unlock(&sbi->iostat_lock);
+	spin_unlock(&sbi->iostat_bytes_lock[lock_index]);
 
 	f2fs_record_iostat(sbi);
 }
@@ -268,7 +317,11 @@ void f2fs_destroy_iostat_processing(void)
 
 int f2fs_init_iostat(struct f2fs_sb_info *sbi)
 {
+	int i;
+
 	/* init iostat info */
+	for (i = 0; i < NR_IO_TYPE; i++)
+		spin_lock_init(&sbi->iostat_bytes_lock[i]);
 	spin_lock_init(&sbi->iostat_lock);
 	spin_lock_init(&sbi->iostat_lat_lock);
 	sbi->iostat_enable = false;

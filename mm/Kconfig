@@ -937,3 +937,128 @@ config MEMFD_ASHMEM_SHIM
 	  now memfds passed to them.
 
 	  Unless you are running Android, say N.
+
+config KSHRINK_SLABD
+	bool "Background slab reclaim worker (experimental)"
+	depends on ARM64 && MEMCG && !NUMA && !MEMORY_HOTPLUG
+	default n
+	help
+	  Allow background kswapd to submit one slab reclaim request to a
+	  dedicated worker during moderate memory pressure. Direct reclaim,
+	  drop_caches, severe pressure and a busy worker remain synchronous.
+	  Requests pin their memory cgroup until completion. This option is
+	  restricted to single-node systems without memory hotplug.
+
+	  This changes reclaim scheduling and needs device stress testing.
+	  If unsure, say N.
+
+config MI_RMAP_EFFICIENCY
+	bool "Bounded high-mapcount file-page protection (experimental)"
+	depends on ARM64 && SYSFS
+	default n
+	help
+	  Adapt Xiaomi's high-mapcount page policy to ordinary file pages.
+	  The default activation threshold is 20 mappings. Protection stops
+	  below 512 MiB available memory, during memcg/forced or constrained
+	  allocation reclaim, and at severe reclaim priorities. Both kept
+	  and activated pages consume a 16 MiB per-context budget.
+
+	  This needs device memory-pressure testing. If unsure, say N.
+
+config READAHEAD_LIMIT
+	bool "Experimental background raw readahead budget"
+	depends on ARM64 && CPUSETS && SYSFS
+	default n
+	help
+	  Allow root to bind a v1 background cpuset and explicitly enable an
+	  eight-page speculative candidate budget at or below 1536 MiB
+	  available memory. The bound group itself is matched, not children.
+	  Ordinary buffered reads and mmap retain their demand range.
+	  Runtime disabled by default; this is an experimental policy.
+	  See Documentation/vm/readahead-limit.rst for controls and limits.
+
+config MI_MTMR
+	bool "MTMR base file page worker (experimental)"
+	depends on ARM64 && MMU && SYSFS && !MEMORY_HOTPLUG
+	default n
+	help
+	  A runtime-disabled bounded worker for final-unmapped ordinary file
+	  base pages and speculative pages with exact demand context. Shares one
+	  worker, uses normal reclaim checks and returns remapped pages.
+	  Readahead metadata pins have a bounded age and pressure release.
+	  Enabling the readahead policy requires READAHEAD_LIMIT for the
+	  current exact-context read/mmap producers; nomap is independent.
+	  Requires target memory and concurrency validation before use.
+
+config MI_ASYNC_RECLAIM
+	bool "File-rmap contention reclaim worker (experimental)"
+	depends on ARM64 && MMU && SYSFS && !MEMORY_HOTPLUG
+	default n
+	help
+	  Allow normal global kswapd inactive-file reclaim to defer base pages
+	  on file rmap lock contention. A bounded worker retries with normal
+	  reference checks. Direct, forced and compound reclaim are unchanged.
+	  Runtime disabled by default; disabling cancels pending pages and
+	  waits for the running page. Requires memory-pressure device testing.
+	  See Documentation/vm/mi-async-reclaim.rst.
+
+config MOON_MMAP_OPT
+	bool "Moon real-time direct-reclaim throttle bypass (experimental)"
+	depends on ARM64
+	default n
+	help
+	  Allow SCHED_FIFO, SCHED_RR and SCHED_DEADLINE tasks to bypass the
+	  pfmemalloc wait in direct-reclaim throttling. Direct reclaim and all
+	  other allocation eligibility checks remain unchanged.
+
+	  This implements only the real-time throttle behavior declared by the
+	  recovered Moon Kconfig. It does not implement the separately mentioned
+	  DMA-IOMMU high-order allocation tuning. Requires target-device memory
+	  pressure and real-time scheduler validation. If unsure, say N.
+
+config MI_MEMPOOL
+	bool "Experimental allocator reserve for orders 0, 1, 4 and 5"
+	depends on ARM64 && ARM64_4K_PAGES && SYSFS && !MEMORY_HOTPLUG
+	default n
+	help
+	  A runtime-disabled 6 MiB NORMAL-zone reserve for eligible failed
+	  order-zero, order-one and order-four allocations. Pressure releases
+	  stored pages. Experimental; requires target-device memory-pressure and concurrency validation.
+
+config MI_FAULT_AROUND
+	bool "UID fault-around selection (experimental)"
+	depends on ARM64 && MMU && SYSFS
+	default n
+	help
+	  Allow a root-controlled UID remainder bitmap to skip speculative
+	  file fault-around mappings. Demand faults are unchanged. Runtime
+	  disabled by default; independent of readahead window policies.
+	  See Documentation/vm/mi-fault-around.rst.
+
+config MI_RECLAIM_POOL
+	bool "C22 order-zero prepared/raw reserve for effective RT allocations"
+	depends on ARM64 && ARM64_4K_PAGES && SYSFS && !MEMORY_HOTPLUG
+	default n
+	help
+	  Independent C22 refill reserve, disabled at runtime by default.
+	  Allows eligible effective-RT slowpath allocations to borrow before
+	  direct reclaim. Exclusive with MI_MEMPOOL through allocator owner.
+	  Raw free capture is a separate runtime-disabled path. Prepared and raw
+	  pages share a 4 MiB cap. Does not implement donor QoS policy.
+
+config MI_MEM_ENGINE
+	bool "Bounded launch-scene allocation watermark adaptation"
+	depends on MMU && TRACEPOINTS && ANDROID_BINDER_IPC
+	default n
+	help
+	  C06 conservative scene-1 allocation watermark adaptation. Disabled
+	  until a privileged exclusive controller explicitly enables it. Only
+	  ordinary sleepable order-0 requests of Binder-node-bound tasks qualify.
+	  Requires a trusted ROM producer; this does not add a ROM integration.
+
+config LAUNCH_PROFILE
+	bool "Bounded launch file profile collector"
+	depends on ANDROID_BINDER_IPC
+	default n
+	help
+	  Independent root-only DLP1 collector. Runtime disabled by default.

@@ -1,0 +1,3 @@
+/system/bin/mi_mem_engine_helper  u:object_r:mi_mem_engine_exec:s0
+/dev/socket/mi_mem_engine         u:object_r:mi_mem_engine_socket:s0
+/dev/mi_mem_engine                u:object_r:mi_mem_engine_device:s0

@@ -7,6 +7,7 @@
 
 #include <linux/types.h>
 #include <linux/tracepoint.h>
+#include <linux/readahead_limit.h>
 #include <linux/mm.h>
 #include <linux/memcontrol.h>
 #include <linux/device.h>
@@ -53,6 +54,152 @@ DEFINE_EVENT(mm_filemap_op_page_cache, mm_filemap_add_to_page_cache,
 	TP_PROTO(struct page *page),
 	TP_ARGS(page)
 	);
+
+/* Request sources describe call sites, not the eventual I/O submitted. */
+#ifndef FILEMAP_RA_SOURCE_DEFINED
+#define FILEMAP_RA_SOURCE_DEFINED
+enum filemap_readahead_source {
+	FILEMAP_RA_READ_SYNC = 0,
+	FILEMAP_RA_READ_ASYNC,
+	FILEMAP_RA_MMAP_SEQ,
+	FILEMAP_RA_MMAP_READAROUND,
+	FILEMAP_RA_MMAP_ASYNC,
+};
+#endif
+
+TRACE_EVENT(filemap_readahead_request,
+	TP_PROTO(struct address_space *mapping, unsigned int source,
+		 pgoff_t demand_start, unsigned long demand_pages),
+
+	TP_ARGS(mapping, source, demand_start, demand_pages),
+
+	TP_STRUCT__entry(
+		__field(unsigned long, i_ino)
+		__field(dev_t, s_dev)
+		__field(unsigned int, source)
+		__field(pgoff_t, demand_start)
+		__field(unsigned long, demand_pages)
+	),
+
+	TP_fast_assign(
+		__entry->i_ino = mapping->host->i_ino;
+		__entry->s_dev = mapping->host->i_sb ?
+			mapping->host->i_sb->s_dev : mapping->host->i_rdev;
+		__entry->source = source;
+		__entry->demand_start = demand_start;
+		__entry->demand_pages = demand_pages;
+	),
+
+	TP_printk("dev=%u:%u ino=0x%lx source=%u demand_start=%lu demand_pages=%lu",
+		  MAJOR(__entry->s_dev), MINOR(__entry->s_dev), __entry->i_ino,
+		  __entry->source, (unsigned long)__entry->demand_start,
+		  __entry->demand_pages)
+);
+
+TRACE_EVENT(filemap_readahead_window,
+	TP_PROTO(struct address_space *mapping, pgoff_t start_index,
+		 unsigned long nr_pages, unsigned long lookahead_pages,
+		 u64 cpuset_id, int cpuset_root, unsigned int cpuset_state,
+		 long available_pages, u64 available_ns),
+
+	TP_ARGS(mapping, start_index, nr_pages, lookahead_pages, cpuset_id,
+		cpuset_root, cpuset_state, available_pages, available_ns),
+
+	TP_STRUCT__entry(
+		__field(unsigned long, i_ino)
+		__field(dev_t, s_dev)
+		__field(pgoff_t, start_index)
+		__field(unsigned long, nr_pages)
+		__field(unsigned long, lookahead_pages)
+		__field(u64, cpuset_id)
+		__field(int, cpuset_root)
+		__field(unsigned int, cpuset_state)
+		__field(long, available_pages)
+		__field(u64, available_ns)
+	),
+
+	TP_fast_assign(
+		__entry->i_ino = mapping->host->i_ino;
+		if (mapping->host->i_sb)
+			__entry->s_dev = mapping->host->i_sb->s_dev;
+		else
+			__entry->s_dev = mapping->host->i_rdev;
+		__entry->start_index = start_index;
+		__entry->nr_pages = nr_pages;
+		__entry->lookahead_pages = lookahead_pages;
+		__entry->cpuset_id = cpuset_id;
+		__entry->cpuset_root = cpuset_root;
+		__entry->cpuset_state = cpuset_state;
+		__entry->available_pages = available_pages;
+		__entry->available_ns = available_ns;
+	),
+
+	TP_printk("dev=%u:%u ino=0x%lx candidate_start_index=%lu "
+		  "candidate_pages=%lu lookahead_pages=%lu cpuset_id=%llu "
+		  "cpuset_root=%d cpuset_state=%u available_pages=%ld "
+		  "available_ns=%llu",
+		  MAJOR(__entry->s_dev), MINOR(__entry->s_dev), __entry->i_ino,
+		  (unsigned long)__entry->start_index, __entry->nr_pages,
+		  __entry->lookahead_pages, __entry->cpuset_id,
+		  __entry->cpuset_root, __entry->cpuset_state,
+		  __entry->available_pages, __entry->available_ns)
+);
+
+/* Real decision inputs; the window event remains a later resample. */
+TRACE_EVENT(filemap_readahead_decision,
+	TP_PROTO(struct address_space *mapping,
+		 const struct readahead_limit_sample *sample),
+	TP_ARGS(mapping, sample),
+	TP_STRUCT__entry(
+		__field(unsigned long, i_ino)
+		__field(dev_t, s_dev)
+		__field(unsigned int, source)
+		__field(unsigned long, demand)
+		__field(unsigned long, demand_size)
+		__field(unsigned long, raw_start)
+		__field(unsigned long, raw_size)
+		__field(unsigned long, raw_async)
+		__field(unsigned long, final_start)
+		__field(unsigned long, final_size)
+		__field(unsigned long, final_async)
+		__field(bool, force)
+		__field(int, reason)
+		__field(u64, identity)
+		__field(u64, target_identity)
+		__field(long, available)
+		__field(u64, generation)
+	),
+	TP_fast_assign(
+		__entry->i_ino = mapping->host->i_ino;
+		__entry->s_dev = mapping->host->i_sb->s_dev;
+		__entry->source = sample->source;
+		__entry->demand = sample->demand;
+		__entry->demand_size = sample->demand_size;
+		__entry->raw_start = sample->raw_start;
+		__entry->raw_size = sample->raw_size;
+		__entry->raw_async = sample->raw_async;
+		__entry->final_start = sample->final_start;
+		__entry->final_size = sample->final_size;
+		__entry->final_async = sample->final_async;
+		__entry->force = sample->force;
+		__entry->reason = sample->reason;
+		__entry->identity = sample->identity;
+		__entry->target_identity = sample->target_identity;
+		__entry->available = sample->available;
+		__entry->generation = sample->generation;
+	),
+	TP_printk("ino=%lu dev=%u:%u source=%u demand=%lu demand_size=%lu "
+		  "raw_start=%lu raw_size=%lu raw_async=%lu final_start=%lu "
+		  "final_size=%lu final_async=%lu reason=%d identity=%llu "
+		  "target_identity=%llu available=%ld generation=%llu force=%u",
+		  __entry->i_ino, MAJOR(__entry->s_dev), MINOR(__entry->s_dev),
+		  __entry->source, __entry->demand, __entry->demand_size,
+		  __entry->raw_start, __entry->raw_size, __entry->raw_async,
+		  __entry->final_start, __entry->final_size, __entry->final_async,
+		  __entry->reason, __entry->identity, __entry->target_identity,
+		  __entry->available,
+		  __entry->generation, __entry->force)
+);
 
 TRACE_EVENT(filemap_set_wb_err,
 		TP_PROTO(struct address_space *mapping, errseq_t eseq),

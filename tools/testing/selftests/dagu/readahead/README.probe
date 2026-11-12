@@ -1,0 +1,97 @@
+Dagu bounded read/mmap observation probe
+========================================
+
+`probe.c` runs exactly one bounded file operation per invocation against a
+small fixture whose byte at file offset N is `N mod 256`:
+
+    probe read|mmap FILE OFFSET LENGTH [--dontneed] [--sequential|--random]
+
+The optional access-pattern flags are mutually exclusive and may appear in
+either order relative to `--dontneed`. `--sequential` and `--random` select
+`POSIX_FADV_SEQUENTIAL`/`POSIX_FADV_RANDOM` for read mode, and
+`MADV_SEQUENTIAL`/`MADV_RANDOM` for mmap mode. Read mode applies
+`posix_fadvise` to the requested range before `pread`. Mmap mode creates the
+requested VMA, applies `madvise` to it, then touches the selected byte. Output
+records `hint`, `hint_api`, and `hint_status`; `not-applied` means cache
+preparation prevented the access from running. A successful advisory call
+records its application, not a guaranteed policy effect.
+
+`read` issues one `pread` for the requested offset and length. It retries only
+when the syscall returns `EINTR`; a regular-file short result before EOF is a
+failure. A request may end at or cross EOF, and the reported return count is
+the number of available bytes. A request beginning at EOF returns zero.
+
+`mmap` maps the requested extent once and touches only its first byte. The
+reported `mmap_offset` is the page-aligned offset passed to `mmap`; its length
+includes the alignment delta. `touch_offset` is the logical file offset that
+was read. The requested range must be fully within the file so the touch
+cannot raise `SIGBUS`. Both modes verify the observed data against the fixture
+pattern. The file must be regular and no larger than 16 MiB; requests are
+bounded to a 16 MiB extent and a 1 MiB length.
+
+Each successful operation reports the requested offset/length, the actual
+`pread` or `mmap` arguments, data validation, and resident-page counts before
+and after for both the whole fixture (`mincore_file_*`) and the accessible
+requested range (`mincore_request_*`). The whole-file counts include pages
+outside the request, which can reveal residency growth beyond the touched
+range. `mincore` counts are auxiliary cache residency observations: they do
+not identify demand versus speculative reads, prove storage I/O, or attribute
+residency to readahead. The probe's `mmap` workload uses `MAP_PRIVATE`;
+mincore uses separate read-only `MAP_SHARED` mappings.
+
+`elapsed_ns` uses `CLOCK_MONOTONIC`. In read mode it brackets only the
+`pread` syscall attempt(s), including an `EINTR` retry. In mmap mode it
+brackets only the single-byte load that can fault the page. It excludes file
+open, mapping setup, hint calls, data checking, mincore, and cache preparation.
+It is a diagnostic sample, not a performance claim.
+
+The optional `--dontneed` calls `posix_fadvise(POSIX_FADV_DONTNEED)` for the
+entire fixture (`offset=0`, `length=0`, through EOF). Use it only with a
+fixture you created for this test. The probe never writes file contents,
+drops global caches, or changes system settings. After the advice, it checks
+mincore for the whole fixture and requested range before running the
+operation. It continues with `cold=confirmed` only when the whole fixture has
+at least one page and both counts report zero resident pages. Otherwise it
+prints `operation=skipped`, reports `cold=not-confirmed` (or `cold=unknown`
+if the advice failed), marks the post-operation counts `not-run`, and exits
+nonzero. `cold=confirmed` means mincore saw
+no resident page in that fixture at the pre-operation check; it is not proof
+that the next read will issue storage I/O.
+
+Build a static AArch64 binary and run the behavior test in the Linux
+container:
+
+    aarch64-linux-gnu-gcc -O2 -Wall -Wextra -Werror -static \
+        -o /tmp/dagu-readahead-probe probe.c
+    python3 test-probe.py /tmp/dagu-readahead-probe
+
+The test creates private temporary fixtures and exercises bounded `pread`,
+mmap alignment and one-byte validation, partial/exact EOF, invalid mmap EOF,
+empty fixtures, corrupt bytes, whole-file and request-range mincore output,
+both access hints in both modes, conflicting-hint rejection, hint plus cache
+preparation, and the cache-preparation rule including EOF. A successful host
+test validates this userspace contract only; it does not replace target
+kernel tracing or establish demand-versus-speculative I/O.
+
+Example invocations on a known fixture:
+
+    python3 - <<'PY'
+    from pathlib import Path
+    Path('/tmp/dagu-ra-fixture').write_bytes(bytes(range(256)) * 48)
+    PY
+    /tmp/dagu-readahead-probe read /tmp/dagu-ra-fixture 4096 4096
+    /tmp/dagu-readahead-probe mmap /tmp/dagu-ra-fixture 4103 17
+    /tmp/dagu-readahead-probe read /tmp/dagu-ra-fixture 4096 4096 \
+        --dontneed --sequential
+    /tmp/dagu-readahead-probe mmap /tmp/dagu-ra-fixture 4103 17 --random
+
+The fixture must contain the expected byte pattern. The `--dontneed` form is
+explicitly opt-in and should be limited to a dedicated fixture file.
+
+For the limited-readahead experiment, mmap also accepts `--fd-random` once,
+independently of the VMA `--sequential`/`--random` hint. It applies
+POSIX_FADV_RANDOM to this open fd before mmap, reports `fd_random=applied`,
+and combines with `--sequential` to exercise FMODE_RANDOM + VM_SEQ_READ.
+Read mode rejects this option. A cold-preparation skip occurs before applying
+it. This is a workload trigger, not evidence of a limit; inspect the actual
+kernel decision event's demand_size=1, force=1 and raw/final tuples.

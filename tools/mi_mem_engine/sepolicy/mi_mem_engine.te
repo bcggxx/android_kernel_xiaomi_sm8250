@@ -1,0 +1,20 @@
+# Merge into PLATFORM PRIVATE policy, not vendor policy (system_server boundary).
+type mi_mem_engine, domain;
+type mi_mem_engine_exec, exec_type, file_type, system_file_type;
+init_daemon_domain(mi_mem_engine)
+type mi_mem_engine_socket, file_type;
+type mi_mem_engine_device, dev_type;
+system_internal_prop(mi_mem_engine_enabled_prop)
+set_prop(system_server, mi_mem_engine_enabled_prop)
+userdebug_or_eng(`set_prop(shell, mi_mem_engine_enabled_prop)')
+get_prop(init, mi_mem_engine_enabled_prop)
+allow mi_mem_engine self:capability sys_admin;
+allow mi_mem_engine self:unix_stream_socket create_stream_socket_perms;
+allow mi_mem_engine mi_mem_engine_device:chr_file { open read write ioctl getattr };
+allow mi_mem_engine system_server:fd use;
+unix_socket_connect(system_server, mi_mem_engine, mi_mem_engine)
+# SCM_RIGHTS file_receive checks the duplicated O_RDWR Binder driver file.
+# Kernel consumes its private identity; helper never invokes Binder ioctls.
+allow mi_mem_engine binder_device:chr_file { read write };
+neverallow { domain -system_server -init } mi_mem_engine_socket:sock_file write;
+neverallow { domain -system_server -mi_mem_engine } mi_mem_engine:unix_stream_socket connectto;

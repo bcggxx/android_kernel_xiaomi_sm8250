@@ -17,6 +17,9 @@
 #include <linux/stddef.h>
 #include <linux/mm.h>
 #include <linux/swap.h>
+#include <linux/mi_mempool.h>
+#include <linux/mi_reclaim_pool.h>
+#include <linux/mi_mem_engine.h>
 #include <linux/interrupt.h>
 #include <linux/pagemap.h>
 #include <linux/jiffies.h>
@@ -3076,6 +3079,20 @@ static void free_unref_page_commit(struct page *page, unsigned long pfn)
 	}
 }
 
+#ifdef CONFIG_MI_RECLAIM_POOL
+void mi_reclaim_pool_return_raw_page(struct page *page)
+{
+	unsigned long pfn = page_to_pfn(page);
+	int migratetype = get_pfnblock_migratetype(page, pfn);
+
+	/*
+	 * The page already completed free_pages_prepare when captured. Return
+	 * it to buddy without a second free lifecycle or PGFREE event.
+	 */
+	free_one_page(page_zone(page), page, pfn, 0, migratetype);
+}
+#endif
+
 /*
  * Free a 0-order page
  */
@@ -3086,10 +3103,20 @@ void free_unref_page(struct page *page)
 
 	if (!free_unref_page_prepare(page, pfn))
 		return;
+	if (mi_reclaim_pool_raw_capture_enabled() &&
+	    !bulkfree_pcp_prepare(page) &&
+	    mi_reclaim_pool_capture_free_page(page,
+			get_pfnblock_migratetype(page, pfn), false)) {
+		mi_mempool_free_event();
+		mi_reclaim_pool_free_event();
+		return;
+	}
 
 	local_irq_save(flags);
 	free_unref_page_commit(page, pfn);
 	local_irq_restore(flags);
+	mi_mempool_free_event();
+	mi_reclaim_pool_free_event();
 }
 
 /*
@@ -3115,12 +3142,18 @@ void free_unref_page_list(struct list_head *list)
 
 		set_page_private(page, 0);
 		trace_mm_page_free_batched(page);
+		if (mi_reclaim_pool_raw_capture_enabled() &&
+		    !bulkfree_pcp_prepare(page) &&
+		    mi_reclaim_pool_capture_free_page(page,
+				get_pfnblock_migratetype(page, pfn), true))
+			goto batch_restore;
 		free_unref_page_commit(page, pfn);
 
 		/*
 		 * Guard against excessive IRQ disabled times when we get
 		 * a large list of pages to free.
 		 */
+batch_restore:
 		if (++batch_count == SWAP_CLUSTER_MAX) {
 			local_irq_restore(flags);
 			batch_count = 0;
@@ -3721,6 +3754,9 @@ retry:
 		     (alloc_flags & (ALLOC_HARDER | ALLOC_HIGH)))) {
 			mark = zone->_watermark[WMARK_MIN];
 		}
+		mark = mme_allocation_mark(mark, gfp_mask, order,
+			alloc_flags & (ALLOC_NO_WATERMARKS | ALLOC_HIGH |
+				       ALLOC_HARDER | ALLOC_OOM));
 		if (!zone_watermark_fast(zone, order, mark,
 				       ac_classzone_idx(ac), alloc_flags)) {
 			int ret;
@@ -4723,6 +4759,33 @@ retry:
 			(gfp_mask & __GFP_FS))
 		goto nopage;
 
+	/* Prepared reserve pages retain normal outer memcg charge and trace. */
+	if (ac->preferred_zoneref && ac->preferred_zoneref->zone &&
+	    zone_idx(ac->preferred_zoneref->zone) <= ac->high_zoneidx &&
+	    (!ac->nodemask || node_isset(zone_to_nid(ac->preferred_zoneref->zone),
+				       *ac->nodemask)) &&
+	    cpuset_zone_allowed(ac->preferred_zoneref->zone, gfp_mask)) {
+		bool needs_prep = false;
+
+		page = mi_reclaim_pool_borrow(gfp_mask, order,
+					    ac->preferred_zoneref->zone,
+					    &needs_prep);
+		if (page) {
+			if (needs_prep) {
+				if (unlikely(check_new_page(page)))
+					page = NULL;
+				else
+					prep_new_page(page, 0, gfp_mask,
+						      alloc_flags);
+			} else if (want_init_on_alloc(gfp_mask)) {
+				/* Refill pages were prepared exactly once. */
+				kernel_init_free_pages(page, 1);
+			}
+			if (page)
+				goto got_pg;
+		}
+	}
+
 	/* Try direct reclaim and then allocating */
 	page = __alloc_pages_direct_reclaim(gfp_mask, order, alloc_flags, ac,
 							&did_some_progress);
@@ -4953,6 +5016,20 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order, int preferred_nid,
 		ac.nodemask = nodemask;
 
 	page = __alloc_pages_slowpath(alloc_mask, order, &ac);
+	if (!page && ac.preferred_zoneref &&
+	    ac.preferred_zoneref->zone &&
+	    zone_idx(ac.preferred_zoneref->zone) <= ac.high_zoneidx &&
+	    (!ac.nodemask || node_isset(zone_to_nid(ac.preferred_zoneref->zone),
+				      *ac.nodemask)) &&
+	    cpuset_zone_allowed(ac.preferred_zoneref->zone, alloc_mask)) {
+		page = mi_mempool_borrow(alloc_mask, order,
+					ac.preferred_zoneref->zone);
+		/* Already prepared: repeat only caller initialization. */
+		if (page && want_init_on_alloc(alloc_mask))
+			kernel_init_free_pages(page, 1 << order);
+		if (page && order && (alloc_mask & __GFP_COMP))
+			prep_compound_page(page, order);
+	}
 
 out:
 	if (memcg_kmem_enabled() && (gfp_mask & __GFP_ACCOUNT) && page &&

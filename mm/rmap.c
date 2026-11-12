@@ -70,6 +70,7 @@
 
 #include <trace/events/tlb.h>
 
+#include "mi_mtmr.h"
 #include "internal.h"
 
 static struct kmem_cache *anon_vma_cachep;
@@ -825,19 +826,20 @@ static bool invalid_page_referenced_vma(struct vm_area_struct *vma, void *arg)
 }
 
 /**
- * page_referenced - test if the page was referenced
+ * page_referenced_trylock - test if the page was referenced
  * @page: the page to test
  * @is_locked: caller holds lock on the page
  * @memcg: target memory cgroup
  * @vm_flags: collect encountered vma->vm_flags who actually referenced the page
+ * @file_contended: optional file-only trylock request and contention result
  *
  * Quick test_and_clear_referenced for all mappings to a page,
  * returns the number of ptes which referenced the page.
  */
-int page_referenced(struct page *page,
+int page_referenced_trylock(struct page *page,
 		    int is_locked,
 		    struct mem_cgroup *memcg,
-		    unsigned long *vm_flags)
+		    unsigned long *vm_flags, bool *file_contended)
 {
 	int we_locked = 0;
 	struct page_referenced_arg pra = {
@@ -846,11 +848,14 @@ int page_referenced(struct page *page,
 	};
 	struct rmap_walk_control rwc = {
 		.rmap_one = page_referenced_one,
+		.file_contended = file_contended,
 		.arg = (void *)&pra,
 		.anon_lock = page_lock_anon_vma_read,
 	};
 
 	*vm_flags = 0;
+	if (file_contended)
+		*file_contended = false;
 	if (!page_mapped(page))
 		return 0;
 
@@ -879,6 +884,12 @@ int page_referenced(struct page *page,
 		unlock_page(page);
 
 	return pra.referenced;
+}
+
+int page_referenced(struct page *page, int is_locked,
+		    struct mem_cgroup *memcg, unsigned long *vm_flags)
+{
+	return page_referenced_trylock(page, is_locked, memcg, vm_flags, NULL);
 }
 
 static bool page_mkclean_one(struct page *page, struct vm_area_struct *vma,
@@ -1208,6 +1219,8 @@ void page_add_file_rmap(struct page *page, bool compound)
 	__mod_lruvec_page_state(page, NR_FILE_MAPPED, nr);
 out:
 	unlock_page_memcg(page);
+	if (!compound)
+		mi_mtmr_remap(page);
 }
 
 static void page_remove_file_rmap(struct page *page, bool compound)
@@ -1250,6 +1263,8 @@ static void page_remove_file_rmap(struct page *page, bool compound)
 		clear_page_mlock(page);
 out:
 	unlock_page_memcg(page);
+	if (!compound && !page_mapped(page))
+		mi_mtmr_nomap(page);
 }
 
 static void page_remove_anon_compound_rmap(struct page *page)
@@ -1722,10 +1737,11 @@ static int page_not_mapped(struct page *page)
 }
 
 /**
- * try_to_unmap - try to remove all page table mappings to a page
+ * try_to_unmap_trylock - try to remove all page table mappings to a page
  * @page: the page to get unmapped
  * @flags: action and flags
- * @vma : target vma for reclaim
+ * @vma: target vma for reclaim
+ * @file_contended: optional file-only trylock request and contention result
  *
  * Tries to remove all the page table entries which are mapping this
  * page, used in the pageout path.  Caller must hold the page lock.
@@ -1734,8 +1750,8 @@ static int page_not_mapped(struct page *page)
  *
  * If unmap is successful, return true. Otherwise, false.
  */
-bool try_to_unmap(struct page *page, enum ttu_flags flags,
-				struct vm_area_struct *vma)
+bool try_to_unmap_trylock(struct page *page, enum ttu_flags flags,
+		struct vm_area_struct *vma, bool *file_contended)
 {
 	struct rmap_walk_control rwc = {
 		.rmap_one = try_to_unmap_one,
@@ -1743,7 +1759,11 @@ bool try_to_unmap(struct page *page, enum ttu_flags flags,
 		.done = page_not_mapped,
 		.anon_lock = page_lock_anon_vma_read,
 		.target_vma = vma,
+		.file_contended = vma ? NULL : file_contended,
 	};
+
+	if (file_contended)
+		*file_contended = false;
 
 	/*
 	 * During exec, a temporary VMA is setup and later moved.
@@ -1768,7 +1788,13 @@ bool try_to_unmap(struct page *page, enum ttu_flags flags,
 	 * try_to_unmap() may return false when it is about to become true,
 	 * if page table locking is skipped: use TTU_SYNC to wait for that.
 	 */
-	return !page_mapcount(page);
+	return !(file_contended && *file_contended) && !page_mapcount(page);
+}
+
+bool try_to_unmap(struct page *page, enum ttu_flags flags,
+		  struct vm_area_struct *vma)
+{
+	return try_to_unmap_trylock(page, flags, vma, NULL);
 }
 
 /**
@@ -1924,8 +1950,16 @@ static void rmap_walk_file(struct page *page, struct rmap_walk_control *rwc,
 
 	pgoff_start = page_to_pgoff(page);
 	pgoff_end = pgoff_start + hpage_nr_pages(page) - 1;
-	if (!locked)
-		i_mmap_lock_read(mapping);
+	if (!locked) {
+		if (rwc->file_contended && !rwc->target_vma) {
+			if (!down_read_trylock(&mapping->i_mmap_rwsem)) {
+				*rwc->file_contended = true;
+				return;
+			}
+		} else {
+			i_mmap_lock_read(mapping);
+		}
+	}
 
 	if (rwc->target_vma) {
 		address = vma_address(page, rwc->target_vma);

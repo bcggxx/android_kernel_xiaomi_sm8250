@@ -1,0 +1,39 @@
+# Merge into PLATFORM PRIVATE policy, not vendor policy (system_server boundary).
+type launch_profile, domain;
+type launch_profile_exec, exec_type, file_type, system_file_type;
+init_daemon_domain(launch_profile)
+type launch_profile_socket, file_type;
+type launch_profile_device, dev_type;
+type launch_profile_data, file_type, data_file_type;
+system_internal_prop(launch_profile_enabled_prop)
+set_prop(system_server, launch_profile_enabled_prop)
+get_prop(system_server, launch_profile_enabled_prop)
+get_prop(launch_profile, launch_profile_enabled_prop)
+userdebug_or_eng(`set_prop(shell, launch_profile_enabled_prop)')
+get_prop(init, launch_profile_enabled_prop)
+allow launch_profile self:capability sys_admin;
+allow launch_profile self:unix_stream_socket create_stream_socket_perms;
+allow launch_profile launch_profile_device:chr_file { open read write ioctl getattr };
+allow launch_profile system_server:fd use;
+unix_socket_connect(system_server, launch_profile, launch_profile)
+# SCM_RIGHTS file_receive checks the duplicated O_RDWR Binder driver file.
+# Kernel consumes its private identity; helper never invokes Binder ioctls.
+allow launch_profile binder_device:chr_file { read write };
+neverallow { domain -system_server -init } launch_profile_socket:sock_file write;
+neverallow { domain -system_server -launch_profile } launch_profile:unix_stream_socket connectto;
+
+# Independent readonly reopen needs open/read checks even though ticket07
+# consumes metadata only. Deliberately grant no mutable app-data file access.
+allow launch_profile appdomain:fd use;
+allow launch_profile { apk_data_file dalvikcache_data_file system_file vendor_file }:file { open read getattr };
+# Snapshot anonymous file metadata/read path is owned by this helper domain.
+allow launch_profile self:file { read getattr };
+type_transition launch_profile launch_profile_data:{ dir file } launch_profile_data;
+allow launch_profile launch_profile_data:dir {
+    create getattr open search read add_name remove_name write
+};
+allow launch_profile launch_profile_data:file {
+    create getattr open read write rename unlink
+};
+allow launch_profile proc_mounts:file r_file_perms;
+allow launch_profile proc_self:lnk_file read;

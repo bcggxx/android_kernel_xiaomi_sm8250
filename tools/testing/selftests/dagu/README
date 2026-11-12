@@ -1,0 +1,101 @@
+Dagu host regression tests
+=====
+
+These tests compile functions extracted from the kernel sources against small
+userspace substitutes. They need Python 3, a native C compiler with sanitizer
+support, and pthreads, plus make and tar. The legacy kselftest framework
+also needs bc and rsync. They do not require root or access to device sysfs.
+They do not validate kernel RCU, IPC priority restoration, reclaim progress,
+boot, OOM behavior or device performance.
+
+Run from the kernel source root:
+
+  make -C tools/testing/selftests TARGETS=dagu run_tests
+
+SANITIZERS defaults to undefined. Use SANITIZERS=address,undefined to also
+check memory safety on hosts supporting AddressSanitizer. HOSTCC selects
+the native compiler used for the extracted code.
+
+Use a separate build directory with:
+
+  make -C tools/testing/selftests TARGETS=dagu O=/tmp/dagu-build run_tests
+
+The standard kselftest install target bundles the tested source files in
+kernel-sources.tar, so installed tests do not need the original checkout:
+
+  make -C tools/testing/selftests TARGETS=dagu install INSTALL_PATH=/tmp/dagu-tests
+  /tmp/dagu-tests/run_kselftest.sh
+
+Build the bundle again after changing a source file before installing tests.
+In-tree runs read the live checkout; installed runs read their source bundle.
+The shared extractor handles braces inside C strings, character literals and
+comments, but is not a general-purpose C parser.
+
+This kernel's legacy TAP runner reports failures as "not ok ... [FAIL]"
+without setting a failing exit status. Consumers must check the TAP results;
+the SM8250 host checks workflow does so explicitly.
+
+`test_limited_readahead.py` extracts the actual raw range and control parser
+helpers. Literal contract examples, empty/overflow/async/marker and strict
+input bounds are host arithmetic/interface checks only. Kernel CSS/RCU,
+concurrency, IO and real policy decisions require a new experimental kernel;
+see Documentation/vm/readahead-limit.rst.
+
+`test_dagu_reclaim.py` also exercises the extracted slab submission and
+registered enable setter: default synchronous fallback, invalid input,
+pending/running drain waits, interrupted disable with admission left closed,
+and a producer paused before the admission lock while disable completes.
+Its worker completion, wait queues, freezer interruption and CSS references
+are userspace substitutes; real memcg/freezer/reclaim validation remains
+necessary on the target kernel.
+
+`test_graphics_priority.py` extracts the restricted Binder graphics policy and
+checks node inherit_rt allow/deny and absent buffer/node inputs, sender task
+reference balance, receiver RT permission and stronger-priority preservation.
+Its scheduler substitute observes boost requests only. It does not execute
+Binder core node-minimum selection, nested transactions or reply/error recovery.
+A node denying inheritance suppresses this extension's boost; Binder core may
+still select an RT minimum configured on that node. Real IPC and recovery
+remain separate device validation requirements.
+
+The graphics check also exercises the opt-in official main-thread comm rules:
+default-off, enabling/disabling subsequent requests, exact versus similar names,
+main versus secondary threads, FIFO/RR versus normal senders, oneway/node/sender
+gates and receiver permissions/equal or stronger RT protection. The parameter's
+actual declaration supplies its default; the host check does not test the kernel
+module-parameter sysfs parser or real in-flight disable/unload semantics.
+
+mi_async_reclaim: test_mi_async_reclaim.py is a finite host admission and
+ownership regression using actual C functions with stubs. It does not verify
+real rmap contention, LRU accounting, worker execution or freezer/stop behavior.
+See Documentation/vm/mi-async-reclaim.rst for the required real memory seam.
+
+The mi_fault_around check extracts the control/decision C functions and uses
+host adapters for kernel APIs. It covers boundaries, collision, error retention,
+readback and switching; it does not validate real mmap/PTEs or concurrency.
+
+mi_reclaim_pool: finite extracted actual owner acquire/release and complete
+borrow entry check. Covers C21/C22 exclusivity, effective RT priority including
+PI and excluding negative DL, GFP/context/worker/zone gates, raw/prepared borrow
+ordering, pool-empty fallback and page/vmstat ownership transfer. The raw test
+covers the independent control, combined budget, capture ownership and raw drain
+return path. Kernel list, lock and task adapters are limited host substitutes.
+Real free commit/list ownership, direct-reclaim hook, cpuset/nodemask race, zero
+and memcg, KASAN/debug lifecycle, shrinker/refill and stop concurrency require
+device acceptance.
+
+The global slab check extracts admission, mode control, pending take and
+serial scan functions. Its iterator and watermarks are substitutes: it checks
+control and reference protocol only, not real memcg offline, shrinkers, RCU,
+freezer or pressure behavior. Real kswapd/multi-memcg/disable validation remains
+required before claiming functional acceptance.
+
+mi_mtmr_ra: finite actual producer pin, insertion, completion, age, bounded
+shrinker release and per-policy close checks. Host adapters do not execute real
+FS submission, IO, pagecache, LRU, PTE, RCU or freezer races. The required real
+FS -> age -> normal reclaim/return -> disable seam remains unrun.
+
+test_moon_mmap_opt.py extracts the actual policy predicate used by the target
+direct-reclaim throttle call site. It checks real-time policy classification
+and null handling only. It does not enter the pfmemalloc wait, execute direct
+reclaim, or prove scheduler/OOM behavior under memory pressure.

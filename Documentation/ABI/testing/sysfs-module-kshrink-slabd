@@ -1,0 +1,69 @@
+What:		/sys/module/kshrink_slabd/parameters/enabled
+Date:		October 2026
+Description:	Runtime boolean switch for CONFIG_KSHRINK_SLABD, when built
+		in; defaults to false. Disabling rejects new asynchronous
+		requests under the request lock and waits for pending/running
+		work and its memcg reference release. Global scan cancels
+		pending work and interrupts running iteration at the next
+		group boundary; an active shrinker must return first. A successful write of
+		false guarantees idle background reclaim on return. The wait
+		is freezable and may be interrupted by a signal: on error,
+		admission stays disabled but drain is not guaranteed; write
+		false again to retry. Invalid input does not change state.
+		Freezing can defer completion until thaw; no bounded latency
+		is promised. Direct reclaim, drop_caches, severe pressure and
+		a busy/unavailable worker remain synchronous. The Kconfig
+		option is also off in the default configuration.
+
+What:		/sys/module/kshrink_slabd/parameters/global_scan
+Date:		November 2026
+Description:	Boolean mode, default false (single-request mode). True
+		selects one serial all-memcg scan on an accepted root/global
+		kswapd request. Only the accepted call skips synchronous
+		reclaim; nonroot, busy, direct and severe-pressure calls do
+		not. Change requires admission disabled and pending/running
+		work drained; otherwise EBUSY, including repeated writes.
+		Invalid input leaves mode unchanged. Shares the existing
+		worker and slot. Optional policy below supplies adaptive deadlines.
+
+What:           /sys/module/kshrink_slabd/parameters/policy
+Date:           November 2026
+Description:    Boolean adaptive global policy, default false. Change only
+                disabled/idle (otherwise EBUSY). Effective only with global_scan
+                and enabled. Uses the existing worker deadline and request slot.
+                An enabled transition starts at max_sleep_time. No new root
+                after a scan means deadline recalculation only, without scan.
+
+What:           /sys/module/kshrink_slabd/parameters/app_launch_scenario
+Date:           November 2026
+Description:    Administrator 0/1 input; global policy must be enabled, otherwise
+                EINVAL. Starts one 3000 ms session; repeated 1 does not extend
+                it. 0, expiry or disable ends once. Policy requests may skip;
+                accepted transfers remain fulfilled and new transfers stay
+                synchronous during launch. No automatic ROM writer is claimed.
+
+What:           /sys/module/kshrink_slabd/parameters/sleep_time
+What:           /sys/module/kshrink_slabd/parameters/max_sleep_time
+What:           /sys/module/kshrink_slabd/parameters/priority
+What:           /sys/module/kshrink_slabd/parameters/slab_pressure_high_mb
+What:           /sys/module/kshrink_slabd/parameters/slab_pressure_low_mb
+Date:           November 2026
+Description:    Unsigned controls: sleep_time 1000..30000 ms (future interval),
+                max_sleep_time 1000..120000 ms, priority 0..12, high <=2048 MiB
+                and >low, low >=50 MiB and <high. Invalid input returns EINVAL
+                without changing state. Default high/low use RAM rounding,
+                documented in Documentation/vm/kshrink_slabd.rst. Pending
+                priority is never raised by a control write. Delays are bounded
+                by max_sleep_time, including a user-written sleep_time.
+
+What:           /sys/module/kshrink_slabd/parameters/stats
+Date:           November 2026
+Description:    Read-only cumulative transferred/fallback/hints/periodic,
+                recalculations/scans/objects/skips, force_wakes and launch
+                started/ended counters, plus pending/busy/iterator/launch/timer,
+                current sleep_ms and capped backoff. objects are shrink_slab
+                returned objects, not pages or bytes. scans are attempted
+                policy-active scan rounds (may abort under pressure). After
+                successful disable pending/busy/iterator/launch/timer are zero
+                and periodic/scans/objects/launch counts stop growing until
+                enable; synchronous fallback counts may still grow.

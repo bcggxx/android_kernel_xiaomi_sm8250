@@ -1,0 +1,158 @@
+diff --git a/services/core/java/com/android/server/wm/ActivityMetricsLogger.java b/services/core/java/com/android/server/wm/ActivityMetricsLogger.java
+index b3208bf..61bcbdf 100644
+--- a/services/core/java/com/android/server/wm/ActivityMetricsLogger.java
++++ b/services/core/java/com/android/server/wm/ActivityMetricsLogger.java
+@@ -181,6 +181,8 @@ class ActivityMetricsLogger {
+     private long mLastLogTimeSecs;
+     private final ActivityTaskSupervisor mSupervisor;
+     private final MetricsLogger mMetricsLogger = new MetricsLogger();
++    private MiMemEngineLaunch mMiMemEngine;
++    private LaunchProfile mLaunchProfile;
+     private final Handler mLoggerHandler = FgThread.getHandler();
+ 
+     /** All active transitions. */
+@@ -207,6 +209,7 @@ class ActivityMetricsLogger {
+      * launched successfully.
+      */
+     static final class LaunchingState {
++        LaunchProfile.Session mLaunchSession;
+         /**
+          * The device uptime of {@link #notifyActivityLaunching}. It can be used as a key for
+          * observer to identify which callbacks belong to a launch event.
+@@ -284,6 +287,7 @@ class ActivityMetricsLogger {
+ 
+     /** The information created when an activity is confirmed to be launched. */
+     private static final class TransitionInfo {
++        MiMemEngineLaunch.Session mMiMemEngineSession;
+         /**
+          * The field to lookup and update an existing transition efficiently between
+          * {@link #notifyActivityLaunching} and {@link #notifyActivityLaunched}.
+@@ -655,6 +659,10 @@ class ActivityMetricsLogger {
+ 
+         if (existingInfo == null) {
+             final LaunchingState launchingState = new LaunchingState();
++            if (android.os.SystemProperties.getBoolean("sys.launch_profile.enabled", false)) {
++                if (mLaunchProfile == null) mLaunchProfile = new LaunchProfile(mSupervisor);
++                launchingState.mLaunchSession = mLaunchProfile.pending();
++            }
+             // Only notify the observer for a new launching event.
+             launchObserverNotifyIntentStarted(intent, launchingState.mStartUptimeNs);
+             return launchingState;
+@@ -733,7 +741,16 @@ class ActivityMetricsLogger {
+ 
+             mLastTransitionInfo.remove(info.mLastLaunchedActivity);
+             // Coalesce multiple (trampoline) activities from a single sequence together.
++            if (mMiMemEngine != null) mMiMemEngine.end(info.mMiMemEngineSession);
++            info.mMiMemEngineSession = null;
++            if (mLaunchProfile != null) {
++                mLaunchProfile.associate(launchingState.mLaunchSession, launchedActivity, processRecord);
++            }
+             info.setLatestLaunchedActivity(launchedActivity);
++            if (processRunning && android.os.SystemProperties.getBoolean("sys.mi_mem_engine.enabled", false)) {
++                if (mMiMemEngine == null) mMiMemEngine = new MiMemEngineLaunch(mSupervisor);
++                info.mMiMemEngineSession = mMiMemEngine.begin(processRecord);
++            }
+             // Update the latest one so it can be found when reporting fully-drawn.
+             mLastTransitionInfo.put(launchedActivity, info);
+ 
+@@ -760,6 +777,13 @@ class ActivityMetricsLogger {
+         if (DEBUG_METRICS) Slog.i(TAG, "notifyActivityLaunched successful");
+         // A new launch sequence has begun. Start tracking it.
+         mTransitionInfoList.add(newInfo);
++        if (mLaunchProfile != null) {
++            mLaunchProfile.associate(launchingState.mLaunchSession, launchedActivity, processRecord);
++        }
++        if (processRunning && android.os.SystemProperties.getBoolean("sys.mi_mem_engine.enabled", false)) {
++            if (mMiMemEngine == null) mMiMemEngine = new MiMemEngineLaunch(mSupervisor);
++            newInfo.mMiMemEngineSession = mMiMemEngine.begin(processRecord);
++        }
+         mLastTransitionInfo.put(launchedActivity, newInfo);
+         startLaunchTrace(newInfo);
+         if (newInfo.isInterestingToLoggerAndObserver()) {
+@@ -1031,6 +1055,7 @@ class ActivityMetricsLogger {
+                 if (info.mProcessRunning) {
+                     // It was HOT/WARM launch, but the process was died somehow right after the
+                     // launch request.
++                    if (mMiMemEngine != null) mMiMemEngine.end(info.mMiMemEngineSession);
+                     info.mProcessRunning = false;
+                     info.mTransitionType = TYPE_TRANSITION_COLD_LAUNCH;
+                     final String msg = "Process " + info.mLastLaunchedActivity.info.processName
+@@ -1045,7 +1070,20 @@ class ActivityMetricsLogger {
+         }
+     }
+ 
++    // r is the same ActivityRecord token recorded by notifyActivityLaunched.
++    // This call is inside realStartActivityLocked, after AMS verified cold attach.
++    void notifyLaunchProfileAttached(ActivityRecord r, WindowProcessController proc) {
++        if (mLaunchProfile == null) return;
++        for (int i = mTransitionInfoList.size() - 1; i >= 0; i--) {
++            TransitionInfo info = mTransitionInfoList.get(i);
++            if (info.mLastLaunchedActivity == r) {
++                mLaunchProfile.attached(info.mLaunchingState.mLaunchSession, r, proc);
++            }
++        }
++    }
++
+     private void abort(@NonNull LaunchingState state, String cause) {
++        if (mLaunchProfile != null) mLaunchProfile.end(state.mLaunchSession, false);
+         if (state.mAssociatedTransitionInfo != null) {
+             abort(state.mAssociatedTransitionInfo, cause);
+             return;
+@@ -1067,6 +1105,10 @@ class ActivityMetricsLogger {
+             Slog.i(TAG, "done abort=" + abort + " cause=" + cause + " timestamp=" + timestampNs
+                     + " info=" + info);
+         }
++        if (mMiMemEngine != null) mMiMemEngine.end(info.mMiMemEngineSession);
++        if (mLaunchProfile != null) {
++            mLaunchProfile.end(info.mLaunchingState.mLaunchSession, !abort);
++        }
+         info.mLaunchingState.stopTrace(abort, info);
+         stopLaunchTrace(info);
+         final Boolean isHibernating =
+diff --git a/services/core/java/com/android/server/wm/ActivityTaskSupervisor.java b/services/core/java/com/android/server/wm/ActivityTaskSupervisor.java
+index 3867d2d..5dd7782 100644
+--- a/services/core/java/com/android/server/wm/ActivityTaskSupervisor.java
++++ b/services/core/java/com/android/server/wm/ActivityTaskSupervisor.java
+@@ -828,6 +828,7 @@ public class ActivityTaskSupervisor implements RecentTasks.Callbacks {
+             r.startLaunchTickingLocked();
+             r.lastLaunchTime = SystemClock.uptimeMillis();
+             r.setProcess(proc);
++            mActivityMetricsLogger.notifyLaunchProfileAttached(r, proc);
+ 
+             // Ensure activity is allowed to be resumed after process has set.
+             if (andResume && !r.canResumeByCompat()) {
+diff --git a/services/core/jni/Android.bp b/services/core/jni/Android.bp
+index 7a710dc..06deb09 100644
+--- a/services/core/jni/Android.bp
++++ b/services/core/jni/Android.bp
+@@ -23,6 +23,8 @@ cc_library_static {
+     ],
+ 
+     srcs: [
++        "com_android_server_wm_MiMemEngineLaunch.cpp",
++        "com_android_server_wm_LaunchProfile.cpp",
+         "BroadcastRadio/JavaRef.cpp",
+         "BroadcastRadio/NativeCallbackThread.cpp",
+         "BroadcastRadio/BroadcastRadioService.cpp",
+diff --git a/services/core/jni/onload.cpp b/services/core/jni/onload.cpp
+index 6464081..1d7b3b8 100644
+--- a/services/core/jni/onload.cpp
++++ b/services/core/jni/onload.cpp
+@@ -24,6 +24,8 @@
+ #include "BroadcastRadio/Tuner.h"
+ 
+ namespace android {
++int register_android_server_wm_MiMemEngineLaunch(JNIEnv* env);
++int register_android_server_wm_LaunchProfile(JNIEnv* env);
+ int register_android_server_BatteryStatsService(JNIEnv* env);
+ int register_android_server_ConsumerIrService(JNIEnv *env);
+ int register_android_server_InputManager(JNIEnv* env);
+@@ -108,6 +110,8 @@ extern "C" jint JNI_OnLoad(JavaVM* vm, void* /* reserved */)
+     register_android_server_connectivity_Vpn(env);
+     register_android_server_devicepolicy_CryptoTestHelper(env);
+     register_android_server_ConsumerIrService(env);
++    if (register_android_server_wm_MiMemEngineLaunch(env) < 0) return JNI_ERR;
++    if (register_android_server_wm_LaunchProfile(env) < 0) return JNI_ERR;
+     register_android_server_BatteryStatsService(env);
+     register_android_server_tv_TvUinputBridge(env);
+     register_android_server_tv_TvInputHal(env);
